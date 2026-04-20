@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useStomp } from './hooks/useStomp';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
@@ -66,6 +66,54 @@ const api = {
     });
     if (res.status === 401) throw new Error('SESSION_EXPIRED');
     if (!res.ok) throw new Error('Failed to fetch prediction');
+    return res.json();
+  },
+
+  async getInstruments() {
+    const res = await fetch(API + '/api/instruments', {
+      headers: { Authorization: 'Bearer ' + this.token },
+    });
+    if (res.status === 401) throw new Error('SESSION_EXPIRED');
+    if (!res.ok) throw new Error('Failed to fetch instruments');
+    return res.json();
+  },
+
+  async getActiveInstruments() {
+    const res = await fetch(API + '/api/instruments/active', {
+      headers: { Authorization: 'Bearer ' + this.token },
+    });
+    if (res.status === 401) throw new Error('SESSION_EXPIRED');
+    if (!res.ok) throw new Error('Failed to fetch active instruments');
+    return res.json();
+  },
+
+  async switchInstrument(id) {
+    const res = await fetch(API + '/api/instruments/' + id + '/switch', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + this.token },
+    });
+    if (res.status === 401) throw new Error('SESSION_EXPIRED');
+    if (!res.ok) throw new Error('Failed to switch instrument');
+    return res.json();
+  },
+
+  async activateInstrument(id) {
+    const res = await fetch(API + '/api/instruments/' + id + '/activate', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + this.token },
+    });
+    if (res.status === 401) throw new Error('SESSION_EXPIRED');
+    if (!res.ok) throw new Error('Failed to activate instrument');
+    return res.json();
+  },
+
+  async deactivateInstrument(id) {
+    const res = await fetch(API + '/api/instruments/' + id + '/deactivate', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + this.token },
+    });
+    if (res.status === 401) throw new Error('SESSION_EXPIRED');
+    if (!res.ok) throw new Error('Failed to deactivate instrument');
     return res.json();
   },
 
@@ -241,6 +289,143 @@ function ConnectionBadge({ connected, error }) {
   );
 }
 
+// ── Instrument Selector ──
+function InstrumentSelector({ onLogout }) {
+  const [instruments, setInstruments] = useState([]);
+  const [activeIds, setActiveIds] = useState(new Set());
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [switching, setSwitching] = useState(null);
+  const ref = useRef(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [all, active] = await Promise.all([
+        api.getInstruments(),
+        api.getActiveInstruments(),
+      ]);
+      setInstruments(all);
+      setActiveIds(new Set(active.map(a => a.id)));
+    } catch (e) {
+      if (e.message === 'SESSION_EXPIRED') { onLogout(); return; }
+    } finally {
+      setLoading(false);
+    }
+  }, [onLogout]);
+
+  useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    const handleClick = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
+  const handleSwitch = async (id) => {
+    setSwitching(id);
+    try {
+      await api.switchInstrument(id);
+      setActiveIds(new Set([id]));
+    } catch (e) {
+      if (e.message === 'SESSION_EXPIRED') { onLogout(); return; }
+    } finally {
+      setSwitching(null);
+      setOpen(false);
+    }
+  };
+
+  const activeInstrument = instruments.find(i => activeIds.has(i.id));
+  const label = activeInstrument?.tradingSymbol || activeInstrument?.name || 'Instruments';
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen(!open)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '6px 12px', borderRadius: 8,
+          border: '1px solid #e5e7eb', background: '#fff',
+          fontSize: 13, fontWeight: 600, cursor: 'pointer', color: '#333',
+        }}
+      >
+        {loading ? '...' : label}
+        <span style={{
+          fontSize: 10, transition: 'transform 0.2s',
+          transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
+        }}>▼</span>
+      </button>
+
+      {open && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, marginTop: 4,
+          minWidth: 240, maxHeight: 320, overflowY: 'auto',
+          background: '#fff', borderRadius: 10, border: '1px solid #e5e7eb',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.12)', zIndex: 100,
+        }}>
+          <div style={{ padding: '10px 14px', borderBottom: '1px solid #f3f4f6' }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: '#888', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              Switch Instrument
+            </span>
+          </div>
+          {instruments.length === 0 ? (
+            <div style={{ padding: '16px 14px', fontSize: 13, color: '#999', textAlign: 'center' }}>
+              {loading ? 'Loading...' : 'No instruments found'}
+            </div>
+          ) : (
+            instruments.map(inst => {
+              const isActive = activeIds.has(inst.id);
+              const isSwitching = switching === inst.id;
+              return (
+                <button
+                  key={inst.id}
+                  onClick={() => !isActive && handleSwitch(inst.id)}
+                  disabled={isSwitching}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    width: '100%', padding: '10px 14px', border: 'none', cursor: isActive ? 'default' : 'pointer',
+                    background: isActive ? '#eff6ff' : '#fff', textAlign: 'left', fontSize: 13,
+                    borderBottom: '1px solid #f9fafb', transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = '#f8fafc'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = isActive ? '#eff6ff' : '#fff'; }}
+                >
+                  <div>
+                    <div style={{ fontWeight: isActive ? 600 : 400, color: isActive ? '#2563eb' : '#333' }}>
+                      {inst.tradingSymbol || inst.name}
+                    </div>
+                    {inst.exchange && (
+                      <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>{inst.exchange}</div>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {inst.marketType && (
+                      <span style={{
+                        fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                        background: '#f3f4f6', color: '#666',
+                      }}>{inst.marketType}</span>
+                    )}
+                    {isActive && (
+                      <span style={{
+                        width: 8, height: 8, borderRadius: '50%', background: '#2563eb', flexShrink: 0,
+                      }} />
+                    )}
+                    {isSwitching && (
+                      <span style={{ fontSize: 11, color: '#888' }}>...</span>
+                    )}
+                  </div>
+                </button>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Dashboard ──
 function Dashboard({ user, onLogout }) {
   const [restPrediction, setRestPrediction] = useState(null);
@@ -304,6 +489,7 @@ function Dashboard({ user, onLogout }) {
     <div style={styles.page}>
       <div style={styles.topBar}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <InstrumentSelector onLogout={onLogout} />
           <span style={{ fontSize: 15, fontWeight: 600 }}>Sensex Predictor</span>
           <ConnectionBadge connected={connected} error={connectionError} />
         </div>

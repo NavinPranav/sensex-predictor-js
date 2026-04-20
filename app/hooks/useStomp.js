@@ -46,9 +46,7 @@ export function useStomp() {
 
         client.subscribe('/topic/live-prices', (msg) => {
           try {
-            const data = JSON.parse(msg.body);
-            console.log('[WS] /topic/live-prices:', data);
-            setLivePrice(data);
+            setLivePrice(JSON.parse(msg.body));
           } catch { /* ignore malformed frames */ }
         });
 
