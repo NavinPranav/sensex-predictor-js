@@ -1,6 +1,14 @@
+import './globals.css';
+
 export const metadata = {
   title: 'Sensex Predictor',
   description: 'AI-powered stock market prediction',
+};
+
+export const viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
 };
 
 export default function RootLayout({ children }) {

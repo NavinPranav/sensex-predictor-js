@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
 import { useStomp } from './hooks/useStomp';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
@@ -15,17 +15,6 @@ const styles = {
   btnOutline: { padding: '6px 14px', borderRadius: 6, border: '1px solid #e5e7eb', background: '#fff', fontSize: 12, cursor: 'pointer', color: '#666' },
   label: { display: 'block', fontSize: 12, color: '#888', marginBottom: 4 },
   error: { background: '#fef2f2', color: '#dc2626', padding: '10px 14px', borderRadius: 8, fontSize: 13, marginBottom: 12 },
-  quotaNotice: {
-    background: '#fffbeb',
-    color: '#92400e',
-    padding: '10px 14px',
-    borderRadius: 8,
-    fontSize: 13,
-    marginBottom: 12,
-    border: '1px solid #fcd34d',
-    lineHeight: 1.45,
-  },
-  topBar: { background: '#fff', borderBottom: '1px solid #e5e7eb', padding: '12px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   metric: { padding: '14px 18px', background: '#fff' },
   metricLabel: { fontSize: 11, color: '#999', textTransform: 'uppercase', letterSpacing: 0.5 },
   metricValue: { fontSize: 18, fontWeight: 600, marginTop: 4 },
@@ -198,7 +187,7 @@ function Login({ onLogin }) {
 
   return (
     <div style={styles.center}>
-      <div style={{ width: '100%', maxWidth: 380, padding: 20 }}>
+      <div className="login-shell">
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
           <h1 style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Bank Nifty outlook</h1>
           <p style={{ fontSize: 13, color: '#888', marginTop: 4 }}>AI-assisted Bank Nifty prediction</p>
@@ -256,14 +245,7 @@ function BankNiftyLiveStreamBanner({ livePrice, connected, connectionError }) {
       ? (connectionError ? `${BN} — ${connectionError}` : `${BN} — connect to stream live`)
       : `${BN} — waiting for first tick…`;
     return (
-      <div style={{
-        background: 'linear-gradient(90deg, #0f172a, #1e293b)',
-        color: '#94a3b8',
-        padding: '10px 20px',
-        fontSize: 13,
-        textAlign: 'center',
-        borderBottom: '1px solid #1e293b',
-      }}>
+      <div className="live-stream-banner live-stream-banner--muted">
         {msg}
       </div>
     );
@@ -272,31 +254,13 @@ function BankNiftyLiveStreamBanner({ livePrice, connected, connectionError }) {
   const isUp = change >= 0;
   const changeColor = isUp ? '#4ade80' : '#f87171';
   return (
-    <div style={{
-      background: 'linear-gradient(90deg, #0f172a, #1e3a5f, #0f172a)',
-      color: '#fff',
-      padding: '10px 20px',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      flexWrap: 'wrap',
-      gap: 14,
-      borderBottom: '1px solid #1e293b',
-    }}>
-      <span style={{ fontWeight: 800, fontSize: 14, letterSpacing: 0.3 }}>{BN}</span>
-      <span style={{ fontSize: 20, fontWeight: 700 }}>{ltp != null ? fmtPrice(ltp) : '—'}</span>
-      <span style={{ fontSize: 14, fontWeight: 600, color: changeColor }}>
+    <div className="live-stream-banner live-stream-banner--live">
+      <span className="live-stream-banner__ltp">{ltp != null ? fmtPrice(ltp) : '—'}</span>
+      <span className="live-stream-banner__chg" style={{ color: changeColor }}>
         {isUp ? '▲' : '▼'} {isUp ? '+' : ''}{Number(change).toFixed(2)}
         <span style={{ opacity: 0.9, marginLeft: 6 }}>
           ({isUp ? '+' : ''}{Number(changePct).toFixed(2)}%)
         </span>
-      </span>
-      <span style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.6, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-        Stream
-        <span style={{
-          display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
-          background: '#22c55e', animation: 'pulse 2s infinite',
-        }} />
       </span>
     </div>
   );
@@ -311,18 +275,15 @@ function LivePriceTicker({ livePrice }) {
   const fmtPrice = (v) => (v != null ? '₹' + Number(v).toLocaleString('en-IN', { minimumFractionDigits: 2 }) : '—');
 
   return (
-    <div style={{
-      ...styles.card, marginBottom: 16, padding: '14px 18px',
-      background: 'linear-gradient(135deg, #1e293b, #0f172a)', color: '#fff', border: 'none',
-    }}>
-      <div style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 }}>
+    <div className="session-ticker">
+      <div style={{ fontSize: 11, color: '#cbd5e1', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 }}>
         Bank Nifty · session
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12 }}>
+      <div className="session-ticker__grid">
         {[['Open', open], ['High', high], ['Low', low], ['Volume', volume]].map(([label, val]) => (
           <div key={label}>
-            <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase' }}>{label}</div>
-            <div style={{ fontSize: 13, fontWeight: 600, marginTop: 2, color: '#e2e8f0' }}>
+            <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
+            <div style={{ fontSize: 14, fontWeight: 700, marginTop: 4, color: '#f8fafc', letterSpacing: '0.01em' }}>
               {label === 'Volume' ? (val != null ? Number(val).toLocaleString('en-IN') : '—') : fmtPrice(val)}
             </div>
           </div>
@@ -332,40 +293,232 @@ function LivePriceTicker({ livePrice }) {
   );
 }
 
-// ── Connection Status Badge ──
-function ConnectionBadge({ connected, error }) {
+function IndexSymbolMenu() {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDocMouse = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocMouse);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouse);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
   return (
-    <div style={{
-      display: 'inline-flex', alignItems: 'center', gap: 6,
-      padding: '3px 10px', borderRadius: 12,
-      background: connected ? '#f0fdf4' : error ? '#fef2f2' : '#fffbeb',
-      border: `1px solid ${connected ? '#bbf7d0' : error ? '#fecaca' : '#fde68a'}`,
-      fontSize: 11, color: connected ? '#16a34a' : error ? '#dc2626' : '#d97706',
-    }}>
-      <span style={{
-        width: 6, height: 6, borderRadius: '50%',
-        background: connected ? '#22c55e' : error ? '#ef4444' : '#f59e0b',
-      }} />
-      {connected ? 'Live' : error ? 'Disconnected' : 'Connecting…'}
+    <div ref={wrapRef} className="index-symbol-menu">
+      <button
+        type="button"
+        className="index-symbol-menu__trigger"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        title="Bank Nifty"
+        aria-label="Show index name (Bank Nifty)"
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="M3 3v18h18" />
+          <path d="M7 15l4-4 4 4 6-8" />
+        </svg>
+      </button>
+      {open ? (
+        <div className="index-symbol-menu__dropdown" role="dialog" aria-label="Index">
+          <div className="index-symbol-menu__title">Bank Nifty</div>
+          <div className="index-symbol-menu__subtitle">NSE index · spot stream</div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ProfileMenu({ userName, onLogout }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDocMouse = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocMouse);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouse);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={wrapRef} className={'profile-menu' + (open ? ' profile-menu--open' : '')}>
+      <div className="profile-menu__hover-zone">
+        <button
+          type="button"
+          className="profile-menu__trigger"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          aria-haspopup="menu"
+          aria-label={`Account menu for ${userName}`}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+            <circle cx="12" cy="7" r="4" />
+          </svg>
+        </button>
+        <div className="profile-menu__name-pop" aria-hidden="true">
+          {userName}
+        </div>
+      </div>
+      {open ? (
+        <div className="profile-menu__dropdown" role="menu" aria-orientation="vertical">
+          <button
+            type="button"
+            className="profile-menu__signout"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onLogout();
+            }}
+          >
+            Sign out
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
 
 // ── Bank Nifty: sole underlying for live ticks + predictions (showcase) ──
-function BankNiftyBadge() {
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 8,
-      padding: '6px 12px', borderRadius: 8,
-      border: '1px solid #e5e7eb', background: '#fff',
-      fontSize: 13, fontWeight: 600, color: '#0f172a',
-    }}>
-      <span style={{
-        fontSize: 9, fontWeight: 700, color: '#64748b', letterSpacing: 0.6, textTransform: 'uppercase',
-      }}>Index</span>
-      <span>Bank Nifty</span>
+// Commented out for now — "Index / Bank Nifty" chip in top bar.
+// function BankNiftyBadge() {
+//   return (
+//     <div style={{
+//       display: 'flex', alignItems: 'center', gap: 8,
+//       padding: '6px 12px', borderRadius: 8,
+//       border: '1px solid #e5e7eb', background: '#fff',
+//       fontSize: 13, fontWeight: 600, color: '#0f172a',
+//     }}>
+//       <span style={{
+//         fontSize: 9, fontWeight: 700, color: '#64748b', letterSpacing: 0.6, textTransform: 'uppercase',
+//       }}>Index</span>
+//       <span>Bank Nifty</span>
+//     </div>
+//   );
+// }
+
+/**
+ * News-style strip: rationale scrolls bottom → top; top edge fades via mask (see globals.css).
+ * Matches live banner / session ticker colors (#0f172a, #1e3a5f, #93c5fd accents).
+ * When `attached` is true, renders flush inside the prediction card (no standalone margins/border).
+ */
+function AiReasonNewsTicker({ text, attached = false }) {
+  const viewportRef = useRef(null);
+  const segmentRef = useRef(null);
+  const [mode, setMode] = useState('fit');
+  const [reduceMotion, setReduceMotion] = useState(false);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const apply = () => setReduceMotion(mq.matches);
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, []);
+
+  useLayoutEffect(() => {
+    const v = viewportRef.current;
+    const seg = segmentRef.current;
+    if (!v || !seg || !text) {
+      setMode('fit');
+      return;
+    }
+    const overflows = seg.scrollHeight > v.clientHeight + 6;
+    if (reduceMotion && overflows) {
+      setMode('reducedScroll');
+    } else if (overflows) {
+      setMode('scroll');
+    } else {
+      setMode('fit');
+    }
+  }, [text, reduceMotion]);
+
+  const duration = Math.min(88, Math.max(18, Math.round((text?.length || 0) / 11)));
+
+  const viewportClass =
+    mode === 'reducedScroll'
+      ? 'ai-reason-ticker__viewport ai-reason-ticker__viewport--reduced ai-reason-ticker__viewport--scroll'
+      : 'ai-reason-ticker__viewport';
+
+  const segmentBlock = (
+    <div ref={segmentRef} className="ai-reason-ticker__segment">
+      <p className="ai-reason-ticker__text">{text}</p>
     </div>
   );
+
+  return (
+    <div
+      className={'ai-reason-ticker' + (attached ? ' ai-reason-ticker--attached' : '')}
+      role="region"
+      aria-label="Prediction rationale"
+    >
+      <div className="ai-reason-ticker__head">
+        <span className="ai-reason-ticker__dot" aria-hidden />
+        AI insight
+      </div>
+      <div ref={viewportRef} className={viewportClass}>
+        {mode === 'scroll' ? (
+          <div
+            className="ai-reason-ticker__track ai-reason-ticker__track--marquee"
+            style={{ '--ai-reason-duration': `${duration}s` }}
+          >
+            {segmentBlock}
+            <div className="ai-reason-ticker__segment" aria-hidden="true">
+              <p className="ai-reason-ticker__text">{text}</p>
+            </div>
+          </div>
+        ) : mode === 'reducedScroll' ? (
+          segmentBlock
+        ) : (
+          <div className="ai-reason-ticker__track ai-reason-ticker__track--static">{segmentBlock}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Merges Gemini quota notice into the same copy shown in AI insight (replaces the old yellow banner). */
+function buildAiInsightText(quotaNotice, predictionReason) {
+  const q = (quotaNotice || '').trim();
+  const r = (predictionReason || '').trim();
+  if (!q && !r) return '';
+  let body;
+  if (q && r) {
+    if (q.includes(r) || r.includes(q)) {
+      body = q.length >= r.length ? q : r;
+    } else {
+      body = `${q}\n\n${r}`;
+    }
+  } else {
+    body = q || r;
+  }
+  if (q) {
+    return `Gemini quota / rate limit\n\n${body}`;
+  }
+  return body;
 }
 
 // ── Dashboard ──
@@ -413,7 +566,13 @@ function Dashboard({ user, accessToken, onLogout }) {
     return () => clearInterval(i);
   }, [fetch_, connected]);
 
-  const quotaNotice = prediction?.aiQuotaNotice;
+  const aiReason =
+    prediction?.predictionReason ??
+    prediction?.prediction_reason ??
+    '';
+  const aiInsightText = prediction
+    ? buildAiInsightText(prediction?.aiQuotaNotice, aiReason)
+    : '';
 
   const dir = prediction?.direction || 'NEUTRAL';
   const isBull = dir === 'BULLISH' || dir === 'BUY';
@@ -430,28 +589,21 @@ function Dashboard({ user, accessToken, onLogout }) {
   };
 
   return (
-    <div style={styles.page}>
-      <header>
-        <div style={styles.topBar}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <BankNiftyBadge />
-            <span style={{ fontSize: 15, fontWeight: 600 }}>Bank Nifty</span>
-            <ConnectionBadge connected={connected} error={connectionError} />
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ fontSize: 12, color: '#888' }}>{user.name}</span>
-            <button style={styles.btnOutline} onClick={onLogout}>Sign out</button>
-          </div>
+    <div className="dashboard-root" style={styles.page}>
+      <header className="dashboard-sticky-header">
+        <div className="top-bar-row top-bar-row--compact-nav">
+          <IndexSymbolMenu />
+          <ProfileMenu userName={user.name} onLogout={onLogout} />
         </div>
         <BankNiftyLiveStreamBanner livePrice={livePrice} connected={connected} connectionError={connectionError} />
       </header>
 
-      <div style={{ maxWidth: 520, margin: '0 auto', padding: 16 }}>
+      <div className="dashboard-content">
         {/* Bank Nifty live quote (single stream) */}
         <LivePriceTicker livePrice={livePrice} />
 
         {/* Horizon tabs */}
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        <div className="horizon-tabs">
           {['1D', '3D', '1W'].map(h => (
             <button key={h} onClick={() => switchHorizon(h)} style={{
               flex: 1, padding: '10px 0', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
@@ -463,12 +615,6 @@ function Dashboard({ user, accessToken, onLogout }) {
           ))}
         </div>
 
-        {quotaNotice && (
-          <div style={styles.quotaNotice} role="status">
-            <strong>Gemini quota / rate limit</strong>
-            <div style={{ marginTop: 6 }}>{quotaNotice}</div>
-          </div>
-        )}
         {error && <div style={styles.error}>{error}</div>}
 
         {loading && !prediction ? (
@@ -476,12 +622,42 @@ function Dashboard({ user, accessToken, onLogout }) {
             <div style={{ color: '#888', fontSize: 14 }}>Loading prediction...</div>
           </div>
         ) : prediction ? (
-          <div style={styles.card}>
+          <div style={{ ...styles.card, position: 'relative' }}>
+            <button
+              type="button"
+              onClick={fetch_}
+              disabled={loading}
+              aria-label="Refresh prediction"
+              title="Refresh prediction"
+              style={{
+                position: 'absolute',
+                top: 8,
+                right: 8,
+                zIndex: 2,
+                width: 30,
+                height: 30,
+                padding: 0,
+                borderRadius: 8,
+                border: '1px solid #e5e7eb',
+                background: '#fff',
+                cursor: loading ? 'not-allowed' : 'pointer',
+                opacity: loading ? 0.5 : 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 1px 2px rgba(15, 23, 42, 0.06)',
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <polyline points="23 4 23 10 17 10" />
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+              </svg>
+            </button>
             {/* Live indicator */}
             {isLive && (
               <div style={{
-                padding: '6px 20px', background: '#f0fdf4',
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '6px 44px 6px 20px', background: '#f0fdf4',
+                display: 'flex', alignItems: 'center', justifyContent: 'flex-start',
               }}>
                 <span style={{ fontSize: 10, fontWeight: 600, color: '#16a34a', textTransform: 'uppercase', letterSpacing: 0.5 }}>
                   Live AI Signal
@@ -491,14 +667,11 @@ function Dashboard({ user, accessToken, onLogout }) {
                     animation: 'pulse 2s infinite',
                   }} />
                 </span>
-                {prediction.engine && (
-                  <span style={{ fontSize: 10, color: '#888' }}>{prediction.engine} Engine</span>
-                )}
               </div>
             )}
 
-            {/* Direction banner */}
-            <div style={{ background: bg, padding: '24px 20px', display: 'flex', alignItems: 'center', gap: 16 }}>
+            {/* Direction banner (extra right padding clears absolute refresh control) */}
+            <div style={{ background: bg, padding: '24px 48px 24px 20px', display: 'flex', alignItems: 'center', gap: 16 }}>
               <span style={{ fontSize: 36, color }}>{arrow}</span>
               <div>
                 <div style={{ fontSize: 28, fontWeight: 700, color }}>{dirLabel}</div>
@@ -509,7 +682,7 @@ function Dashboard({ user, accessToken, onLogout }) {
             </div>
 
             {/* Metrics */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
+            <div className="prediction-metrics">
               {[
                 ['Magnitude', prediction.magnitude != null ? (Number(prediction.magnitude) >= 0 ? '+' : '') + Number(prediction.magnitude).toFixed(2) + '%' : 'N/A'],
                 ['Volatility', fmtVol(prediction.predictedVolatility)],
@@ -532,6 +705,7 @@ function Dashboard({ user, accessToken, onLogout }) {
                 {prediction.predictionDate && <span>{prediction.predictionDate}</span>}
               </div>
             )}
+            {aiInsightText ? <AiReasonNewsTicker text={aiInsightText} attached /> : null}
           </div>
         ) : (
           <div style={{ ...styles.card, padding: 24 }}>
@@ -540,24 +714,17 @@ function Dashboard({ user, accessToken, onLogout }) {
           </div>
         )}
 
-        {/* Status footer */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 }}>
-          <button onClick={fetch_} style={styles.btnOutline}>Refresh now</button>
-          <span style={{ fontSize: 11, color: '#aaa' }}>
-            {isLive
-              ? 'Streaming live · Bank Nifty'
-              : lastRestUpdate
-                ? `Updated: ${lastRestUpdate.toLocaleTimeString()}`
-                : ''}
-          </span>
-        </div>
-
-        <div style={{ marginTop: 16, padding: 12, background: '#f9fafb', borderRadius: 8, fontSize: 11, color: '#999', textAlign: 'center' }}>
+        <footer className="dashboard-page-footer">
           Bank Nifty spot, INR · Market hours Mon–Fri 9:15 AM – 3:30 PM IST
+          {isLive
+            ? ' · Streaming live · Bank Nifty'
+            : lastRestUpdate
+              ? ` · Updated: ${lastRestUpdate.toLocaleTimeString()}`
+              : ''}
           {connected
             ? ' · Live ticks via WebSocket; AI prediction refresh is periodic (default 60s)'
             : ' · Fallback: REST refresh every 5 min'}
-        </div>
+        </footer>
       </div>
     </div>
   );

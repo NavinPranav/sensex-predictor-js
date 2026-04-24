@@ -1,0 +1,500 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* ── Login ── */
+.login-shell {
+  width: 100%;
+  max-width: 380px;
+  padding: 16px;
+  margin: 0 auto;
+}
+
+@media (max-width: 360px) {
+  .login-shell {
+    padding: 12px;
+  }
+}
+
+/* ── Dashboard shell ── */
+.dashboard-root {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: #f8f9fa;
+}
+
+/* Sticky: nav + live LTP strip stay at top while scrolling */
+.dashboard-sticky-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  width: 100%;
+  padding-top: env(safe-area-inset-top, 0px);
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+.top-bar-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  padding: 8px clamp(10px, 2.5vw, 16px);
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.top-bar-row__left,
+.top-bar-row__right {
+  display: flex;
+  align-items: center;
+  gap: clamp(8px, 2vw, 12px);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.top-bar-row__right {
+  margin-left: auto;
+}
+
+/* Profile control (dashboard header): icon + click menu */
+.profile-menu {
+  position: relative;
+  z-index: 110;
+  flex-shrink: 0;
+}
+
+.profile-menu__hover-zone {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+/* Username appears on hover (left of icon so it stays on-screen when bar is right-aligned) */
+.profile-menu__name-pop {
+  position: absolute;
+  right: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 6px 10px;
+  max-width: min(240px, calc(100vw - 56px));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  color: #0f172a;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.1);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.15s ease, visibility 0.15s ease;
+}
+
+.profile-menu:hover .profile-menu__name-pop {
+  opacity: 1;
+  visibility: visible;
+}
+
+.profile-menu--open .profile-menu__name-pop {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.profile-menu__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 50%;
+  background: #fff;
+  cursor: pointer;
+  color: #475569;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.profile-menu__trigger:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: #1e293b;
+}
+
+.profile-menu__dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  left: auto;
+  min-width: 148px;
+  max-width: min(200px, calc(100vw - 16px));
+  padding: 4px 0;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.12);
+}
+
+.profile-menu__signout {
+  display: block;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  font-size: 14px;
+  font-weight: 500;
+  color: #dc2626;
+  cursor: pointer;
+  border-radius: 8px;
+  box-sizing: border-box;
+}
+
+.profile-menu__signout:hover {
+  background: #fef2f2;
+}
+
+/* Index selector (graph icon): replaces top-bar title; click shows “Bank Nifty” */
+.index-symbol-menu {
+  position: relative;
+  z-index: 109;
+  flex-shrink: 0;
+}
+
+.index-symbol-menu__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 50%;
+  background: #fff;
+  cursor: pointer;
+  color: #475569;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.index-symbol-menu__trigger:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: #2563eb;
+}
+
+.index-symbol-menu__dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 180px;
+  padding: 12px 14px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.12);
+}
+
+.index-symbol-menu__title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
+
+.index-symbol-menu__subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.top-bar-row--compact-nav {
+  justify-content: flex-start;
+}
+
+.top-bar-row--compact-nav .profile-menu {
+  margin-left: auto;
+}
+
+@media (max-width: 520px) {
+  .top-bar-row {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+}
+
+/* Live LTP / change strip */
+.live-stream-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: clamp(6px, 2vw, 10px);
+  padding: clamp(5px, 1.4vw, 8px) clamp(10px, 3vw, 16px);
+  border-bottom: 1px solid #1e293b;
+  text-align: center;
+}
+
+.live-stream-banner--muted {
+  background: linear-gradient(90deg, #0f172a, #1e293b);
+  color: #94a3b8;
+  font-size: clamp(11px, 2.8vw, 12px);
+}
+
+.live-stream-banner--live {
+  background: linear-gradient(90deg, #0f172a, #1e3a5f, #0f172a);
+  color: #fff;
+}
+
+.live-stream-banner__ltp {
+  font-size: clamp(15px, 4.2vw, 17px);
+  font-weight: 700;
+}
+
+.live-stream-banner__chg {
+  font-size: clamp(11px, 3vw, 13px);
+  font-weight: 600;
+}
+
+/* Session OHLC grid under banner */
+.session-ticker {
+  margin-bottom: 16px;
+  padding: clamp(12px, 3vw, 14px) clamp(14px, 4vw, 18px);
+  background: linear-gradient(135deg, #1e293b, #0f172a);
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.session-ticker__grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: clamp(8px, 2vw, 12px);
+}
+
+@media (max-width: 480px) {
+  .session-ticker__grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 320px) {
+  .session-ticker__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Main scrollable column */
+.dashboard-content {
+  width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
+  padding: clamp(12px, 3vw, 16px);
+  padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
+}
+
+/* Prediction card metrics: avoid overflow on narrow screens */
+.prediction-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+@media (max-width: 360px) {
+  .prediction-metrics {
+    grid-template-columns: 1fr;
+  }
+}
+
+.horizon-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  width: 100%;
+}
+
+.horizon-tabs button {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Long notched / landscape phones */
+@media (max-height: 500px) and (orientation: landscape) {
+  .dashboard-sticky-header {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  }
+
+  .live-stream-banner {
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+}
+
+/* ── AI rationale: news-style strip (vertical crawl, palette matches live banner) ── */
+.ai-reason-ticker {
+  margin-top: 16px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid #1e293b;
+  background: linear-gradient(90deg, #0f172a 0%, #1e3a5f 42%, #172554 100%);
+  box-shadow: 0 1px 0 rgba(37, 99, 235, 0.45) inset;
+}
+
+/* Flush with prediction card: no outer gap, no double border with parent .card */
+.ai-reason-ticker--attached {
+  margin-top: 0;
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+  border-top: 1px solid #e5e7eb;
+  box-shadow: 0 1px 0 rgba(37, 99, 235, 0.45) inset;
+}
+
+/* Page footer below prediction (disclaimer + live/updated status) */
+.dashboard-page-footer {
+  margin-top: 16px;
+  padding: 12px clamp(10px, 3vw, 14px);
+  background: #f9fafb;
+  border-radius: 8px;
+  font-size: 11px;
+  color: #999;
+  text-align: center;
+  line-height: 1.55;
+}
+
+.ai-reason-ticker__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px 5px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #93c5fd;
+  border-bottom: 1px solid rgba(37, 99, 235, 0.35);
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.ai-reason-ticker__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.35);
+  flex-shrink: 0;
+  animation: ai-reason-dot-pulse 2.2s ease-in-out infinite;
+}
+
+@keyframes ai-reason-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.65;
+    transform: scale(0.92);
+  }
+}
+
+/* ~4–5 lines on phones; taller on desktop (same line-height scale) */
+.ai-reason-ticker__viewport {
+  position: relative;
+  font-size: clamp(12px, 3.1vw, 14px);
+  line-height: 1.5;
+  color: #e2e8f0;
+  height: calc(4.65 * 1.5em);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    transparent 3%,
+    rgba(0, 0, 0, 0.2) 8%,
+    rgba(0, 0, 0, 0.65) 14%,
+    #000 20%,
+    #000 76%,
+    rgba(0, 0, 0, 0.88) 90%,
+    rgba(0, 0, 0, 0.4) 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    transparent 3%,
+    rgba(0, 0, 0, 0.2) 8%,
+    rgba(0, 0, 0, 0.65) 14%,
+    #000 20%,
+    #000 76%,
+    rgba(0, 0, 0, 0.88) 90%,
+    rgba(0, 0, 0, 0.4) 100%
+  );
+}
+
+@media (min-width: 768px) {
+  .ai-reason-ticker__viewport {
+    height: calc(6.25 * 1.5em);
+  }
+}
+
+@media (min-width: 1200px) {
+  .ai-reason-ticker__viewport {
+    height: calc(7 * 1.5em);
+  }
+}
+
+.ai-reason-ticker__viewport--reduced {
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+.ai-reason-ticker__viewport--reduced.ai-reason-ticker__viewport--scroll {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ai-reason-ticker__segment {
+  padding: 10px 14px 12px;
+  box-sizing: border-box;
+}
+
+.ai-reason-ticker__text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ai-reason-ticker__track {
+  will-change: transform;
+}
+
+.ai-reason-ticker__track--static {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.ai-reason-ticker__track--marquee {
+  animation: ai-reason-marquee-y var(--ai-reason-duration, 36s) linear infinite;
+}
+
+@keyframes ai-reason-marquee-y {
+  0% {
+    transform: translateY(0);
+  }
+  100% {
+    transform: translateY(-50%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-reason-ticker__track--marquee {
+    animation: none;
+  }
+}
