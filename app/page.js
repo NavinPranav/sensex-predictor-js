@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useStomp } from './hooks/useStomp';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
@@ -15,6 +15,16 @@ const styles = {
   btnOutline: { padding: '6px 14px', borderRadius: 6, border: '1px solid #e5e7eb', background: '#fff', fontSize: 12, cursor: 'pointer', color: '#666' },
   label: { display: 'block', fontSize: 12, color: '#888', marginBottom: 4 },
   error: { background: '#fef2f2', color: '#dc2626', padding: '10px 14px', borderRadius: 8, fontSize: 13, marginBottom: 12 },
+  quotaNotice: {
+    background: '#fffbeb',
+    color: '#92400e',
+    padding: '10px 14px',
+    borderRadius: 8,
+    fontSize: 13,
+    marginBottom: 12,
+    border: '1px solid #fcd34d',
+    lineHeight: 1.45,
+  },
   topBar: { background: '#fff', borderBottom: '1px solid #e5e7eb', padding: '12px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   metric: { padding: '14px 18px', background: '#fff' },
   metricLabel: { fontSize: 11, color: '#999', textTransform: 'uppercase', letterSpacing: 0.5 },
@@ -133,6 +143,35 @@ const api = {
   },
 };
 
+/** Parse STOMP live-prices payload (Bank Nifty stream only). */
+function extractBankNiftyLiveFields(livePrice) {
+  if (!livePrice) return null;
+  const pick = (...keys) => {
+    for (const k of keys) if (livePrice[k] != null) return livePrice[k];
+    return null;
+  };
+  const ltp = pick('ltp', 'lastTradedPrice', 'last_traded_price', 'lastPrice');
+  const open = pick('open', 'openPrice', 'open_price_of_the_day');
+  const high = pick('high', 'highPrice', 'high_price_of_the_day');
+  const low = pick('low', 'lowPrice', 'low_price_of_the_day');
+  const close = pick('close', 'closePrice', 'close_price');
+  const volume = pick('volume', 'volumeTradeForTheDay', 'volume_trade_for_the_day', 'totalTradedVolume');
+  let change = pick('change', 'netChange', 'net_change');
+  let changePct = pick('changePercent', 'percentChange', 'pChange', 'netChangePercent');
+  if (change == null && ltp != null && close != null) change = ltp - close;
+  if (changePct == null && change != null && close) changePct = (change / close) * 100;
+  return {
+    ltp,
+    open,
+    high,
+    low,
+    close,
+    volume,
+    change: change ?? 0,
+    changePct: changePct ?? 0,
+  };
+}
+
 // ── Login ──
 function Login({ onLogin }) {
   const [isReg, setIsReg] = useState(false);
@@ -161,8 +200,8 @@ function Login({ onLogin }) {
     <div style={styles.center}>
       <div style={{ width: '100%', maxWidth: 380, padding: 20 }}>
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
-          <h1 style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Sensex Predictor</h1>
-          <p style={{ fontSize: 13, color: '#888', marginTop: 4 }}>AI-powered market prediction</p>
+          <h1 style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Bank Nifty outlook</h1>
+          <p style={{ fontSize: 13, color: '#888', marginTop: 4 }}>AI-assisted Bank Nifty prediction</p>
         </div>
 
         <div style={{ ...styles.card, padding: 24 }}>
@@ -207,47 +246,77 @@ function Login({ onLogin }) {
   );
 }
 
-// ── Live Price Ticker ──
+// ── Full-width live strip: Bank Nifty only (never broker symbol names) ──
+function BankNiftyLiveStreamBanner({ livePrice, connected, connectionError }) {
+  const BN = 'Bank Nifty';
+  const fmtPrice = (v) => (v != null ? '₹' + Number(v).toLocaleString('en-IN', { minimumFractionDigits: 2 }) : '—');
+  const f = extractBankNiftyLiveFields(livePrice);
+  if (!f) {
+    const msg = !connected
+      ? (connectionError ? `${BN} — ${connectionError}` : `${BN} — connect to stream live`)
+      : `${BN} — waiting for first tick…`;
+    return (
+      <div style={{
+        background: 'linear-gradient(90deg, #0f172a, #1e293b)',
+        color: '#94a3b8',
+        padding: '10px 20px',
+        fontSize: 13,
+        textAlign: 'center',
+        borderBottom: '1px solid #1e293b',
+      }}>
+        {msg}
+      </div>
+    );
+  }
+  const { ltp, change, changePct } = f;
+  const isUp = change >= 0;
+  const changeColor = isUp ? '#4ade80' : '#f87171';
+  return (
+    <div style={{
+      background: 'linear-gradient(90deg, #0f172a, #1e3a5f, #0f172a)',
+      color: '#fff',
+      padding: '10px 20px',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      flexWrap: 'wrap',
+      gap: 14,
+      borderBottom: '1px solid #1e293b',
+    }}>
+      <span style={{ fontWeight: 800, fontSize: 14, letterSpacing: 0.3 }}>{BN}</span>
+      <span style={{ fontSize: 20, fontWeight: 700 }}>{ltp != null ? fmtPrice(ltp) : '—'}</span>
+      <span style={{ fontSize: 14, fontWeight: 600, color: changeColor }}>
+        {isUp ? '▲' : '▼'} {isUp ? '+' : ''}{Number(change).toFixed(2)}
+        <span style={{ opacity: 0.9, marginLeft: 6 }}>
+          ({isUp ? '+' : ''}{Number(changePct).toFixed(2)}%)
+        </span>
+      </span>
+      <span style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.6, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        Stream
+        <span style={{
+          display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
+          background: '#22c55e', animation: 'pulse 2s infinite',
+        }} />
+      </span>
+    </div>
+  );
+}
+
+// ── Bank Nifty session stats (LTP lives in top banner only) ──
 function LivePriceTicker({ livePrice }) {
   if (!livePrice) return null;
-
-  const pick = (...keys) => { for (const k of keys) if (livePrice[k] != null) return livePrice[k]; return null; };
-  const symbol = pick('tradingSymbol', 'trading_symbol', 'symbolName', 'symbol_name', 'symbol') || 'SENSEX';
-  const ltp = pick('ltp', 'lastTradedPrice', 'last_traded_price', 'lastPrice');
-  const open = pick('open', 'openPrice', 'open_price_of_the_day');
-  const high = pick('high', 'highPrice', 'high_price_of_the_day');
-  const low = pick('low', 'lowPrice', 'low_price_of_the_day');
-  const close = pick('close', 'closePrice', 'close_price');
-  const volume = pick('volume', 'volumeTradeForTheDay', 'volume_trade_for_the_day', 'totalTradedVolume');
-  let change = pick('change', 'netChange', 'net_change');
-  let changePct = pick('changePercent', 'percentChange', 'pChange', 'netChangePercent');
-  if (change == null && ltp != null && close != null) change = ltp - close;
-  if (changePct == null && change != null && close) changePct = (change / close) * 100;
-  change = change ?? 0;
-  changePct = changePct ?? 0;
-
-  const isUp = change >= 0;
-  const changeColor = isUp ? '#22c55e' : '#ef4444';
-  const fmtPrice = (v) => v != null ? '₹' + Number(v).toLocaleString('en-IN', { minimumFractionDigits: 2 }) : '—';
+  const f = extractBankNiftyLiveFields(livePrice);
+  if (!f) return null;
+  const { open, high, low, volume } = f;
+  const fmtPrice = (v) => (v != null ? '₹' + Number(v).toLocaleString('en-IN', { minimumFractionDigits: 2 }) : '—');
 
   return (
     <div style={{
-      ...styles.card, marginBottom: 16, padding: '16px 20px',
+      ...styles.card, marginBottom: 16, padding: '14px 18px',
       background: 'linear-gradient(135deg, #1e293b, #0f172a)', color: '#fff', border: 'none',
     }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <div>
-          <div style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.5 }}>{symbol}</div>
-          <div style={{ fontSize: 28, fontWeight: 700, marginTop: 2 }}>{ltp != null ? fmtPrice(ltp) : '—'}</div>
-        </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: 16, fontWeight: 600, color: changeColor }}>
-            {isUp ? '▲' : '▼'} {isUp ? '+' : ''}{Number(change).toFixed(2)}
-          </div>
-          <div style={{ fontSize: 12, color: changeColor, marginTop: 2 }}>
-            ({isUp ? '+' : ''}{Number(changePct).toFixed(2)}%)
-          </div>
-        </div>
+      <div style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 }}>
+        Bank Nifty · session
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12 }}>
         {[['Open', open], ['High', high], ['Low', low], ['Volume', volume]].map(([label, val]) => (
@@ -258,13 +327,6 @@ function LivePriceTicker({ livePrice }) {
             </div>
           </div>
         ))}
-      </div>
-      <div style={{ marginTop: 10, fontSize: 10, color: '#475569', textAlign: 'right' }}>
-        LIVE
-        <span style={{
-          display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
-          background: '#22c55e', marginLeft: 4, verticalAlign: 'middle', animation: 'pulse 2s infinite',
-        }} />
       </div>
     </div>
   );
@@ -289,152 +351,32 @@ function ConnectionBadge({ connected, error }) {
   );
 }
 
-// ── Instrument Selector ──
-function InstrumentSelector({ onLogout }) {
-  const [instruments, setInstruments] = useState([]);
-  const [activeIds, setActiveIds] = useState(new Set());
-  const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [switching, setSwitching] = useState(null);
-  const ref = useRef(null);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [all, active] = await Promise.all([
-        api.getInstruments(),
-        api.getActiveInstruments(),
-      ]);
-      setInstruments(all);
-      setActiveIds(new Set(active.map(a => a.id)));
-    } catch (e) {
-      if (e.message === 'SESSION_EXPIRED') { onLogout(); return; }
-    } finally {
-      setLoading(false);
-    }
-  }, [onLogout]);
-
-  useEffect(() => { load(); }, [load]);
-
-  useEffect(() => {
-    const handleClick = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
-    };
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, []);
-
-  const handleSwitch = async (id) => {
-    setSwitching(id);
-    try {
-      await api.switchInstrument(id);
-      setActiveIds(new Set([id]));
-    } catch (e) {
-      if (e.message === 'SESSION_EXPIRED') { onLogout(); return; }
-    } finally {
-      setSwitching(null);
-      setOpen(false);
-    }
-  };
-
-  const activeInstrument = instruments.find(i => activeIds.has(i.id));
-  const label = activeInstrument?.tradingSymbol || activeInstrument?.name || 'Instruments';
-
+// ── Bank Nifty: sole underlying for live ticks + predictions (showcase) ──
+function BankNiftyBadge() {
   return (
-    <div ref={ref} style={{ position: 'relative' }}>
-      <button
-        onClick={() => setOpen(!open)}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 6,
-          padding: '6px 12px', borderRadius: 8,
-          border: '1px solid #e5e7eb', background: '#fff',
-          fontSize: 13, fontWeight: 600, cursor: 'pointer', color: '#333',
-        }}
-      >
-        {loading ? '...' : label}
-        <span style={{
-          fontSize: 10, transition: 'transform 0.2s',
-          transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
-        }}>▼</span>
-      </button>
-
-      {open && (
-        <div style={{
-          position: 'absolute', top: '100%', left: 0, marginTop: 4,
-          minWidth: 240, maxHeight: 320, overflowY: 'auto',
-          background: '#fff', borderRadius: 10, border: '1px solid #e5e7eb',
-          boxShadow: '0 8px 24px rgba(0,0,0,0.12)', zIndex: 100,
-        }}>
-          <div style={{ padding: '10px 14px', borderBottom: '1px solid #f3f4f6' }}>
-            <span style={{ fontSize: 11, fontWeight: 600, color: '#888', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-              Switch Instrument
-            </span>
-          </div>
-          {instruments.length === 0 ? (
-            <div style={{ padding: '16px 14px', fontSize: 13, color: '#999', textAlign: 'center' }}>
-              {loading ? 'Loading...' : 'No instruments found'}
-            </div>
-          ) : (
-            instruments.map(inst => {
-              const isActive = activeIds.has(inst.id);
-              const isSwitching = switching === inst.id;
-              return (
-                <button
-                  key={inst.id}
-                  onClick={() => !isActive && handleSwitch(inst.id)}
-                  disabled={isSwitching}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    width: '100%', padding: '10px 14px', border: 'none', cursor: isActive ? 'default' : 'pointer',
-                    background: isActive ? '#eff6ff' : '#fff', textAlign: 'left', fontSize: 13,
-                    borderBottom: '1px solid #f9fafb', transition: 'background 0.15s',
-                  }}
-                  onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = '#f8fafc'; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = isActive ? '#eff6ff' : '#fff'; }}
-                >
-                  <div>
-                    <div style={{ fontWeight: isActive ? 600 : 400, color: isActive ? '#2563eb' : '#333' }}>
-                      {inst.tradingSymbol || inst.name}
-                    </div>
-                    {inst.exchange && (
-                      <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>{inst.exchange}</div>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    {inst.marketType && (
-                      <span style={{
-                        fontSize: 10, padding: '2px 6px', borderRadius: 4,
-                        background: '#f3f4f6', color: '#666',
-                      }}>{inst.marketType}</span>
-                    )}
-                    {isActive && (
-                      <span style={{
-                        width: 8, height: 8, borderRadius: '50%', background: '#2563eb', flexShrink: 0,
-                      }} />
-                    )}
-                    {isSwitching && (
-                      <span style={{ fontSize: 11, color: '#888' }}>...</span>
-                    )}
-                  </div>
-                </button>
-              );
-            })
-          )}
-        </div>
-      )}
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 8,
+      padding: '6px 12px', borderRadius: 8,
+      border: '1px solid #e5e7eb', background: '#fff',
+      fontSize: 13, fontWeight: 600, color: '#0f172a',
+    }}>
+      <span style={{
+        fontSize: 9, fontWeight: 700, color: '#64748b', letterSpacing: 0.6, textTransform: 'uppercase',
+      }}>Index</span>
+      <span>Bank Nifty</span>
     </div>
   );
 }
 
 // ── Dashboard ──
-function Dashboard({ user, onLogout }) {
+function Dashboard({ user, accessToken, onLogout }) {
   const [restPrediction, setRestPrediction] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [horizon, setHorizon] = useState('1D');
   const [lastRestUpdate, setLastRestUpdate] = useState(null);
 
-  const { connected, livePrediction, livePrice, connectionError, setHorizon: wsSetHorizon } = useStomp();
+  const { connected, livePrediction, livePrice, connectionError, setHorizon: wsSetHorizon } = useStomp(accessToken);
 
   // Prefer live WebSocket prediction when it matches the selected horizon
   const isLive = connected && livePrediction?.horizon === horizon;
@@ -471,6 +413,8 @@ function Dashboard({ user, onLogout }) {
     return () => clearInterval(i);
   }, [fetch_, connected]);
 
+  const quotaNotice = prediction?.aiQuotaNotice;
+
   const dir = prediction?.direction || 'NEUTRAL';
   const isBull = dir === 'BULLISH' || dir === 'BUY';
   const isBear = dir === 'BEARISH' || dir === 'SELL';
@@ -487,20 +431,23 @@ function Dashboard({ user, onLogout }) {
 
   return (
     <div style={styles.page}>
-      <div style={styles.topBar}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <InstrumentSelector onLogout={onLogout} />
-          <span style={{ fontSize: 15, fontWeight: 600 }}>Sensex Predictor</span>
-          <ConnectionBadge connected={connected} error={connectionError} />
+      <header>
+        <div style={styles.topBar}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <BankNiftyBadge />
+            <span style={{ fontSize: 15, fontWeight: 600 }}>Bank Nifty</span>
+            <ConnectionBadge connected={connected} error={connectionError} />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ fontSize: 12, color: '#888' }}>{user.name}</span>
+            <button style={styles.btnOutline} onClick={onLogout}>Sign out</button>
+          </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontSize: 12, color: '#888' }}>{user.name}</span>
-          <button style={styles.btnOutline} onClick={onLogout}>Sign out</button>
-        </div>
-      </div>
+        <BankNiftyLiveStreamBanner livePrice={livePrice} connected={connected} connectionError={connectionError} />
+      </header>
 
       <div style={{ maxWidth: 520, margin: '0 auto', padding: 16 }}>
-        {/* Live market price — always streaming */}
+        {/* Bank Nifty live quote (single stream) */}
         <LivePriceTicker livePrice={livePrice} />
 
         {/* Horizon tabs */}
@@ -516,6 +463,12 @@ function Dashboard({ user, onLogout }) {
           ))}
         </div>
 
+        {quotaNotice && (
+          <div style={styles.quotaNotice} role="status">
+            <strong>Gemini quota / rate limit</strong>
+            <div style={{ marginTop: 6 }}>{quotaNotice}</div>
+          </div>
+        )}
         {error && <div style={styles.error}>{error}</div>}
 
         {loading && !prediction ? (
@@ -560,8 +513,8 @@ function Dashboard({ user, onLogout }) {
               {[
                 ['Magnitude', prediction.magnitude != null ? (Number(prediction.magnitude) >= 0 ? '+' : '') + Number(prediction.magnitude).toFixed(2) + '%' : 'N/A'],
                 ['Volatility', fmtVol(prediction.predictedVolatility)],
-                ['Current', prediction.currentSensex ? '₹' + Number(prediction.currentSensex).toLocaleString('en-IN') : 'N/A'],
-                ['Target', prediction.targetSensex ? '₹' + Number(prediction.targetSensex).toLocaleString('en-IN') : 'N/A'],
+                ['Index (now)', (prediction.currentPrice ?? prediction.currentSensex) ? '₹' + Number(prediction.currentPrice ?? prediction.currentSensex).toLocaleString('en-IN') : 'N/A'],
+                ['Target', (prediction.targetPrice ?? prediction.targetSensex) ? '₹' + Number(prediction.targetPrice ?? prediction.targetSensex).toLocaleString('en-IN') : 'N/A'],
               ].map(([label, val]) => (
                 <div key={label} style={{ ...styles.metric, borderTop: '1px solid #f3f4f6' }}>
                   <div style={styles.metricLabel}>{label}</div>
@@ -592,7 +545,7 @@ function Dashboard({ user, onLogout }) {
           <button onClick={fetch_} style={styles.btnOutline}>Refresh now</button>
           <span style={{ fontSize: 11, color: '#aaa' }}>
             {isLive
-              ? 'Streaming live'
+              ? 'Streaming live · Bank Nifty'
               : lastRestUpdate
                 ? `Updated: ${lastRestUpdate.toLocaleTimeString()}`
                 : ''}
@@ -600,10 +553,10 @@ function Dashboard({ user, onLogout }) {
         </div>
 
         <div style={{ marginTop: 16, padding: 12, background: '#f9fafb', borderRadius: 8, fontSize: 11, color: '#999', textAlign: 'center' }}>
-          Market hours: Mon-Fri 9:15 AM - 3:30 PM IST
+          Bank Nifty spot, INR · Market hours Mon–Fri 9:15 AM – 3:30 PM IST
           {connected
-            ? ' | Live updates via WebSocket'
-            : ' | Fallback: auto-refreshes every 5 min'}
+            ? ' · Live ticks via WebSocket; AI prediction refresh is periodic (default 60s)'
+            : ' · Fallback: REST refresh every 5 min'}
         </div>
       </div>
     </div>
@@ -613,16 +566,27 @@ function Dashboard({ user, onLogout }) {
 // ── App ──
 export default function Home() {
   const [user, setUser] = useState(null);
+  const [accessToken, setAccessToken] = useState(null);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
     setUser(api.init());
+    setAccessToken(api.token);
     setReady(true);
   }, []);
 
-  const logout = () => { api.logout(); setUser(null); };
+  const logout = () => {
+    api.logout();
+    setUser(null);
+    setAccessToken(null);
+  };
+
+  const onLogin = (u) => {
+    setUser(u);
+    setAccessToken(api.token);
+  };
 
   if (!ready) return null;
-  if (!user) return <Login onLogin={setUser} />;
-  return <Dashboard user={user} onLogout={logout} />;
+  if (!user) return <Login onLogin={onLogin} />;
+  return <Dashboard user={user} accessToken={accessToken} onLogout={logout} />;
 }

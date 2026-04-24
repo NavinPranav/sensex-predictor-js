@@ -9,15 +9,13 @@ const WS_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080') + '/
 const RECONNECT_DELAY = 5000;
 
 /**
- * Manages a STOMP-over-SockJS connection with auto-reconnect.
+ * STOMP-over-SockJS with JWT on CONNECT.
  *
- * - Subscribes to /topic/live-predictions (one horizon at a time)
- * - Subscribes to /topic/live-prices (always streaming raw market data)
- * - Sends horizon changes to /app/set-horizon
- *
- * @returns {{ connected, livePrediction, livePrice, connectionError, setHorizon }}
+ * - Subscribes to /user/topic/live-predictions (per-user queue)
+ * - Subscribes to /user/topic/live-prices
+ * - Sends horizon to /app/predict/subscribe (starts live AI prediction loop server-side)
  */
-export function useStomp() {
+export function useStomp(accessToken) {
   const clientRef = useRef(null);
   const [connected, setConnected] = useState(false);
   const [connectionError, setConnectionError] = useState(null);
@@ -25,34 +23,60 @@ export function useStomp() {
   const [livePrice, setLivePrice] = useState(null);
   const activeHorizonRef = useRef('1D');
 
+  const disconnect = useCallback(() => {
+    const c = clientRef.current;
+    if (c?.connected) {
+      try {
+        c.publish({ destination: '/app/predict/unsubscribe', body: '{}' });
+      } catch {
+        /* ignore */
+      }
+    }
+    if (c?.active) {
+      c.deactivate();
+    }
+    clientRef.current = null;
+    setConnected(false);
+  }, []);
+
   const connect = useCallback(() => {
-    if (clientRef.current?.active) return;
+    if (!accessToken) {
+      return;
+    }
+    if (clientRef.current?.active) {
+      return;
+    }
 
     const client = new Client({
       webSocketFactory: () => new SockJS(WS_URL),
+      connectHeaders: {
+        Authorization: 'Bearer ' + accessToken,
+      },
       reconnectDelay: RECONNECT_DELAY,
 
       onConnect: () => {
         setConnected(true);
         setConnectionError(null);
 
-        client.subscribe('/topic/live-predictions', (msg) => {
+        client.subscribe('/user/topic/live-predictions', (msg) => {
           try {
             const data = JSON.parse(msg.body);
-            console.log('[WS] /topic/live-predictions:', data);
             setLivePrediction(data);
-          } catch { /* ignore malformed frames */ }
+          } catch {
+            /* ignore malformed frames */
+          }
         });
 
-        client.subscribe('/topic/live-prices', (msg) => {
+        client.subscribe('/user/topic/live-prices', (msg) => {
           try {
             setLivePrice(JSON.parse(msg.body));
-          } catch { /* ignore malformed frames */ }
+          } catch {
+            /* ignore */
+          }
         });
 
-        // Tell backend to stream predictions for the current horizon
         client.publish({
-          destination: '/app/set-horizon',
+          destination: '/app/predict/subscribe',
           body: JSON.stringify({ horizon: activeHorizonRef.current }),
         });
       },
@@ -73,15 +97,7 @@ export function useStomp() {
 
     clientRef.current = client;
     client.activate();
-  }, []);
-
-  const disconnect = useCallback(() => {
-    if (clientRef.current?.active) {
-      clientRef.current.deactivate();
-    }
-    clientRef.current = null;
-    setConnected(false);
-  }, []);
+  }, [accessToken]);
 
   const setHorizon = useCallback((horizon) => {
     activeHorizonRef.current = horizon;
@@ -89,12 +105,9 @@ export function useStomp() {
     try {
       if (clientRef.current?.connected) {
         clientRef.current.publish({
-          destination: '/app/set-horizon',
+          destination: '/app/predict/subscribe',
           body: JSON.stringify({ horizon }),
         });
-        console.log('[WS] Sent /app/set-horizon:', horizon);
-      } else {
-        console.warn('[WS] Not connected — horizon will be sent on reconnect');
       }
     } catch (e) {
       console.warn('[WS] Could not send horizon:', e.message);
@@ -102,9 +115,13 @@ export function useStomp() {
   }, []);
 
   useEffect(() => {
+    if (!accessToken) {
+      disconnect();
+      return undefined;
+    }
     connect();
     return () => disconnect();
-  }, [connect, disconnect]);
+  }, [accessToken, connect, disconnect]);
 
   return { connected, livePrediction, livePrice, connectionError, setHorizon };
 }
