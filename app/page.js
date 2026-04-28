@@ -280,6 +280,13 @@ function SessionStats({ livePrice }) {
   );
 }
 
+/** Unix seconds for chart time comparison (lightweight-charts may use number UTCTimestamp). */
+function chartTimeToUnixSeconds(t) {
+  if (t == null) return null;
+  if (typeof t === 'number' && Number.isFinite(t)) return t;
+  return null;
+}
+
 // ── Candlestick chart ──
 function CandlestickChart({ candles, liveCandle, signal }) {
   const containerRef = useRef(null);
@@ -328,20 +335,29 @@ function CandlestickChart({ candles, liveCandle, signal }) {
     };
   }, []);
 
-  // Load historical candles
+  // Load historical candles (empty array clears series when horizon resets)
   useEffect(() => {
-    if (seriesRef.current && candles?.length) {
-      seriesRef.current.setData(candles);
-      chartRef.current?.timeScale().fitContent();
-    }
+    if (!seriesRef.current) return;
+    const data = Array.isArray(candles) ? candles : [];
+    seriesRef.current.setData(data);
+    if (data.length) chartRef.current?.timeScale().fitContent();
   }, [candles]);
 
-  // Stream live candle updates
+  // Stream live candle updates — never pass a bar older than the last loaded OHLC bar (prevents LW error on horizon switch / duplicate tab clicks).
   useEffect(() => {
-    if (seriesRef.current && liveCandle) {
-      seriesRef.current.update(liveCandle);
+    if (!seriesRef.current || !liveCandle) return;
+    const liveTs = chartTimeToUnixSeconds(liveCandle.time);
+    if (liveTs == null) return;
+    if (candles?.length) {
+      const lastTs = chartTimeToUnixSeconds(candles[candles.length - 1].time);
+      if (lastTs != null && liveTs < lastTs) return;
     }
-  }, [liveCandle]);
+    try {
+      seriesRef.current.update(liveCandle);
+    } catch {
+      /* ignore race with setData */
+    }
+  }, [liveCandle, candles]);
 
   // Draw BUY/SELL signal markers
   useEffect(() => {
@@ -692,6 +708,23 @@ function Dashboard({ user, accessToken, onLogout }) {
 
   const isLive = connected && livePrediction?.horizon === horizon;
   const prediction = isLive ? livePrediction : restPrediction;
+  const LIVE_PREDICTION_STALE_AFTER_SEC = 90;
+  const liveTsMs = Number(livePrediction?.predictionTimestampMs || 0);
+  const liveAgeSec = isLive && liveTsMs > 0 ? Math.max(0, Math.floor((Date.now() - liveTsMs) / 1000)) : null;
+  const isLiveStale = isLive && liveAgeSec != null && liveAgeSec > LIVE_PREDICTION_STALE_AFTER_SEC;
+  const liveBackendFailed = isLive && Boolean(livePrediction?.liveError);
+  const liveStatusText = (() => {
+    if (liveBackendFailed) {
+      const reason = String(livePrediction?.liveErrorMessage || '').trim();
+      return reason
+        ? `Live AI update failed on backend (${reason}). Showing fallback output.`
+        : 'Live AI update failed on backend. Showing fallback output.';
+    }
+    if (isLiveStale) {
+      return `No fresh live AI update for ${liveAgeSec}s. Showing last received output.`;
+    }
+    return '';
+  })();
 
   // Clock and session update every 10s
   useEffect(() => {
@@ -729,7 +762,13 @@ function Dashboard({ user, accessToken, onLogout }) {
     liveTickRef.current = f;
   }, [livePrice, horizon]);
 
+  const prevHorizonRef = useRef(horizon);
+
   const switchHorizon = useCallback((h) => {
+    if (h !== prevHorizonRef.current) {
+      prevHorizonRef.current = h;
+      setChartCandles([]);
+    }
     setHorizon(h);
     wsSetHorizon(h);
     setRestPrediction(null);
@@ -771,6 +810,24 @@ function Dashboard({ user, accessToken, onLogout }) {
     if (!q && !r) return '';
     if (q && r) return `${q}\n\n${r}`;
     return q || r;
+  })();
+
+  const lastPredictionText = (() => {
+    const ts = Number(prediction?.predictionTimestampMs || 0);
+    if (Number.isFinite(ts) && ts > 0) {
+      const t = new Date(ts);
+      if (!Number.isNaN(t.getTime())) {
+        return `Last updated: ${t.toLocaleTimeString('en-IN', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: true,
+          timeZone: 'Asia/Kolkata',
+        })} IST`;
+      }
+    }
+    const d = String(prediction?.predictionDate || '').trim();
+    return d ? `Prediction date: ${d}` : '';
   })();
 
   const HORIZONS = [
@@ -847,6 +904,11 @@ function Dashboard({ user, accessToken, onLogout }) {
                 <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
                   Predict {horizon} ahead · {prediction.horizon || horizon}
                 </div>
+                {lastPredictionText ? (
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+                    {lastPredictionText}
+                  </div>
+                ) : null}
               </div>
             </div>
 
@@ -871,6 +933,22 @@ function Dashboard({ user, accessToken, onLogout }) {
 
             {/* Prediction metadata */}
             <PredictionMeta prediction={prediction} isLive={isLive} />
+
+            {/* Live prediction health */}
+            {liveStatusText ? (
+              <div style={{
+                margin: '10px 16px 0',
+                borderRadius: 10,
+                border: '1px solid #fde68a',
+                background: '#fffbeb',
+                color: '#92400e',
+                fontSize: 12,
+                lineHeight: 1.45,
+                padding: '10px 12px',
+              }}>
+                {liveStatusText}
+              </div>
+            ) : null}
 
             {/* AI rationale */}
             {aiText ? <AiReasonTicker text={aiText} attached /> : null}
