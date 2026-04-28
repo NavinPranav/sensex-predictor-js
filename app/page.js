@@ -826,8 +826,7 @@ function Dashboard({ user, accessToken, onLogout }) {
         })} IST`;
       }
     }
-    const d = String(prediction?.predictionDate || '').trim();
-    return d ? `Prediction date: ${d}` : '';
+    return '';
   })();
 
   const HORIZONS = [
