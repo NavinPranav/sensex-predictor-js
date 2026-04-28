@@ -412,36 +412,77 @@ function SessionChartCarousel({ livePrice, candles, liveCandle, signal }) {
     return () => ro.disconnect();
   }, [measureActiveSlide, livePrice, candles, liveCandle, signal]);
 
+  const goToSlide = useCallback((idx) => {
+    const vp = vpRef.current;
+    if (!vp) return;
+    const w = vp.clientWidth;
+    if (w < 1) return;
+    vp.scrollTo({ left: idx * w, behavior: 'smooth' });
+  }, []);
+
   return (
     <section className="session-chart-carousel" aria-label="Bank Nifty session and chart">
-      <div
-        ref={vpRef}
-        className="session-chart-carousel__viewport"
-        style={vpHeight != null ? { height: vpHeight } : undefined}
-      >
-        <div className="session-chart-carousel__slide">
-          <div ref={slide0Ref} className="session-chart-carousel__slide-inner">
-            {livePrice ? (
-              <SessionStats livePrice={livePrice} />
-            ) : (
-              <div className="session-ticker session-ticker--placeholder session-ticker--placeholder-carousel">
-                <div style={{ fontSize: 11, color: '#cbd5e1', textTransform: 'uppercase', letterSpacing: 0.5 }}>Bank Nifty · session</div>
-                <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 10 }}>Waiting for live ticks…</div>
-              </div>
-            )}
+      <div className="session-chart-carousel__wrap">
+        <div
+          ref={vpRef}
+          className="session-chart-carousel__viewport"
+          style={vpHeight != null ? { height: vpHeight } : undefined}
+        >
+          <div className="session-chart-carousel__slide">
+            <div ref={slide0Ref} className="session-chart-carousel__slide-inner">
+              {livePrice ? (
+                <SessionStats livePrice={livePrice} />
+              ) : (
+                <div className="session-ticker session-ticker--placeholder session-ticker--placeholder-carousel">
+                  <div style={{ fontSize: 11, color: '#cbd5e1', textTransform: 'uppercase', letterSpacing: 0.5 }}>Bank Nifty · session</div>
+                  <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 10 }}>Waiting for live ticks…</div>
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="session-chart-carousel__slide">
+            <div ref={slide1Ref} className="session-chart-carousel__slide-inner">
+              <CandlestickChart candles={candles} liveCandle={liveCandle} signal={signal} />
+            </div>
           </div>
         </div>
-        <div className="session-chart-carousel__slide">
-          <div ref={slide1Ref} className="session-chart-carousel__slide-inner">
-            <CandlestickChart candles={candles} liveCandle={liveCandle} signal={signal} />
+
+        {slideIdx === 1 ? (
+          <div className="session-chart-carousel__edge session-chart-carousel__edge--left">
+            <button
+              type="button"
+              className="session-chart-carousel__arrow-btn"
+              onClick={() => goToSlide(0)}
+              aria-label="Show live market session data"
+              title="Live session"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M15 18l-6-6 6-6" />
+              </svg>
+            </button>
           </div>
-        </div>
+        ) : null}
+        {slideIdx === 0 ? (
+          <div className="session-chart-carousel__edge session-chart-carousel__edge--right">
+            <button
+              type="button"
+              className="session-chart-carousel__arrow-btn"
+              onClick={() => goToSlide(1)}
+              aria-label="Show candlestick chart"
+              title="Chart"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M9 18l6-6-6-6" />
+              </svg>
+            </button>
+          </div>
+        ) : null}
       </div>
       <div className="session-chart-carousel__nav" aria-hidden="true">
         <span className={'session-chart-carousel__dot' + (slideIdx === 0 ? ' session-chart-carousel__dot--active' : '')} />
         <span className={'session-chart-carousel__dot' + (slideIdx === 1 ? ' session-chart-carousel__dot--active' : '')} />
       </div>
-      <p className="session-chart-carousel__hint">Swipe right for chart · Swipe left for session</p>
+      <p className="session-chart-carousel__hint">Pan or zoom the chart in the center · Edge arrows or swipe to switch session ↔ chart</p>
     </section>
   );
 }
@@ -452,7 +493,6 @@ function TradingLevels({ prediction, isBull, isBear }) {
   const sl = prediction?.stopLoss;
   const tp = prediction?.targetPrice ?? prediction?.targetSensex;
   const rr = prediction?.riskReward;
-  const noTrade = prediction?.noTradeZone;
   const validMin = prediction?.validMinutes;
 
   if (!entry && !sl && !tp) return null;
@@ -467,12 +507,6 @@ function TradingLevels({ prediction, isBull, isBear }) {
         Intraday Trade Levels
         {validMin && <span style={{ marginLeft: 8, fontWeight: 400, color: '#9ca3af' }}>valid ~{validMin} min</span>}
       </div>
-
-      {noTrade && (
-        <div style={{ background: '#fefce8', border: '1px solid #fde68a', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 12, color: '#92400e', fontWeight: 600 }}>
-          NO-TRADE ZONE — confidence too low for a safe entry. Wait for a clearer signal.
-        </div>
-      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
         {[
@@ -502,7 +536,7 @@ function TradingLevels({ prediction, isBull, isBear }) {
 }
 
 // ── Confidence bar ──
-function ConfidenceBar({ confidence, noTradeZone }) {
+function ConfidenceBar({ confidence }) {
   const pct = Math.min(100, Math.max(0, Number(confidence || 0)));
   const color = pct >= 75 ? '#22c55e' : pct >= 65 ? '#f59e0b' : '#ef4444';
   return (
@@ -730,7 +764,6 @@ function Dashboard({ user, accessToken, onLogout }) {
   const signalArrow = isBull ? '▲' : isBear ? '▼' : '▬';
   const signalLabel = isBull ? 'BUY' : isBear ? 'SELL' : 'HOLD';
 
-  const noTradeZone = prediction?.noTradeZone || (Number(prediction?.confidence) < 65 && !isHold);
 
   const aiText = (() => {
     const q = (prediction?.aiQuotaNotice || '').trim();
@@ -807,15 +840,7 @@ function Dashboard({ user, accessToken, onLogout }) {
             </button>
 
             {/* Direction banner */}
-            <div style={{ background: signalBg, padding: '20px 48px 20px 20px', display: 'flex', alignItems: 'center', gap: 16, position: 'relative' }}>
-              {/* No-trade zone overlay */}
-              {noTradeZone && (
-                <div style={{ position: 'absolute', inset: 0, background: 'rgba(255,255,255,0.6)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1, borderRadius: 0 }}>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: '#78350f', background: '#fef3c7', padding: '6px 14px', borderRadius: 20, border: '1px solid #fcd34d' }}>
-                    NO-TRADE ZONE · confidence below threshold
-                  </span>
-                </div>
-              )}
+            <div style={{ background: signalBg, padding: '20px 48px 20px 20px', display: 'flex', alignItems: 'center', gap: 16 }}>
               <span style={{ fontSize: 40, color: signalColor }}>{signalArrow}</span>
               <div>
                 <div style={{ fontSize: 30, fontWeight: 700, color: signalColor }}>{signalLabel}</div>
@@ -829,7 +854,7 @@ function Dashboard({ user, accessToken, onLogout }) {
             <TradingLevels prediction={prediction} isBull={isBull} isBear={isBear} />
 
             {/* Confidence bar */}
-            <ConfidenceBar confidence={prediction.confidence} noTradeZone={noTradeZone} />
+            <ConfidenceBar confidence={prediction.confidence} />
 
             {/* Volatility + magnitude */}
             <div className="prediction-metrics" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', borderTop: '1px solid #f3f4f6' }}>
