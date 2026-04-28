@@ -21,7 +21,7 @@ export function useStomp(accessToken) {
   const [connectionError, setConnectionError] = useState(null);
   const [livePrediction, setLivePrediction] = useState(null);
   const [livePrice, setLivePrice] = useState(null);
-  const activeHorizonRef = useRef('1D');
+  const activeHorizonRef = useRef('15M');
 
   const disconnect = useCallback(() => {
     const c = clientRef.current;

@@ -291,6 +291,97 @@
   }
 }
 
+.session-ticker--placeholder {
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+/* Tight placeholder when inside swipe carousel (height follows content) */
+.session-ticker--placeholder-carousel {
+  min-height: unset;
+  padding: 20px 16px;
+}
+
+/* Session stats ↔ chart: horizontal swipe (scroll-snap) */
+.session-chart-carousel {
+  margin-bottom: 16px;
+  width: 100%;
+}
+
+.session-chart-carousel .session-ticker {
+  margin-bottom: 0;
+}
+
+.session-chart-carousel__viewport {
+  display: flex;
+  align-items: flex-start;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  gap: 0;
+  border-radius: 12px;
+  outline: none;
+  overscroll-behavior-x: contain;
+  min-height: 0;
+}
+
+.session-chart-carousel__viewport::-webkit-scrollbar {
+  display: none;
+}
+
+.session-chart-carousel__slide {
+  flex: 0 0 100%;
+  align-self: flex-start;
+  width: 100%;
+  min-width: 100%;
+  max-width: 100%;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+  box-sizing: border-box;
+  min-height: 0;
+}
+
+.session-chart-carousel__slide-inner {
+  width: 100%;
+  min-height: 0;
+}
+
+.session-chart-carousel__nav {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.session-chart-carousel__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #cbd5e1;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.session-chart-carousel__dot--active {
+  background: #2563eb;
+  transform: scale(1.15);
+}
+
+.session-chart-carousel__hint {
+  margin: 6px 0 0;
+  font-size: 10px;
+  color: #94a3b8;
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+
 /* Main scrollable column */
 .dashboard-content {
   width: 100%;
