@@ -949,7 +949,7 @@ function PredictionHistoryDialog({ open, onClose }) {
 
 const USER_ROLES = ['USER', 'PREMIUM', 'ADMIN'];
 
-function AdminUsersSection({ currentEmail, onSelfRoleChanged }) {
+function AdminUsersSection({ currentEmail, onSelfRoleChanged, embedded }) {
   const [rows, setRows] = useState([]);
   const [pending, setPending] = useState({}); // id -> selected role before save
   const [savingId, setSavingId] = useState(null);
@@ -982,7 +982,7 @@ function AdminUsersSection({ currentEmail, onSelfRoleChanged }) {
   }
 
   return (
-    <div style={{ marginTop: 24, borderTop: '1px solid #e2e8f0', paddingTop: 20 }}>
+    <div style={embedded ? { marginTop: 0, paddingTop: 0 } : { marginTop: 24, borderTop: '1px solid #e2e8f0', paddingTop: 20 }}>
       <h3 style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 600, color: '#1e293b' }}>User roles</h3>
       <p style={{ margin: '0 0 12px', fontSize: 12, color: '#64748b', lineHeight: 1.5 }}>
         Grant <strong>ADMIN</strong> to another account after they have registered. You cannot remove the last admin.
@@ -1066,7 +1066,7 @@ STRICT RULES:
   3. stop_loss is mandatory and must never equal entry_price or target_price.
   4. Output ONLY valid JSON — no extra text, no markdown.`;
 
-function AdminPromptSection() {
+function AdminPromptSection({ embedded }) {
   const [promptText, setPromptText] = useState('');
   const [label, setLabel] = useState('');
   const [activePrompt, setActivePrompt] = useState(null);
@@ -1113,8 +1113,10 @@ function AdminPromptSection() {
   const hasMissingVar = promptText && !promptText.includes('{target_minutes}');
 
   return (
-    <div style={{ marginTop: 24, borderTop: '1px solid #e2e8f0', paddingTop: 20 }}>
-      <h3 style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 600, color: '#1e293b' }}>AI Prompt Management</h3>
+    <div style={embedded ? { marginTop: 0, paddingTop: 0, borderTop: 'none' } : { marginTop: 24, borderTop: '1px solid #e2e8f0', paddingTop: 20 }}>
+      {!embedded ? (
+        <h3 style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 600, color: '#1e293b' }}>AI Prompt Management</h3>
+      ) : null}
       <p style={{ margin: '0 0 12px', fontSize: 12, color: '#64748b', lineHeight: 1.5 }}>
         Customise the system prompt sent to Gemini for every prediction. The following dynamic variables are
         substituted at runtime — you <strong>must</strong> include them:
@@ -1221,6 +1223,8 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
   const liveTickRef = useRef(null);
   const [instrumentsOpen, setInstrumentsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [userMgmtOpen, setUserMgmtOpen] = useState(false);
+  const [aiPromptOpen, setAiPromptOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeInstrumentId, setActiveInstrumentId] = useState('BANKNIFTY');
@@ -1336,6 +1340,19 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
   }, [sidebarOpen]);
 
   useEffect(() => {
+    if (!aiPromptOpen) return;
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        setAiPromptOpen(false);
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, [aiPromptOpen]);
+
+  useEffect(() => {
     const el = sidebarRef.current;
     if (!el) return;
     if (sidebarOpen) el.removeAttribute('inert');
@@ -1390,7 +1407,7 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
           ref={sidebarRef}
           id="dashboard-sidebar"
           className={'dashboard-sidebar' + (sidebarOpen ? ' dashboard-sidebar--open' : '')}
-          aria-label="Instruments, prediction history, and settings"
+          aria-label="Instruments, prediction history, user management, and settings"
           aria-hidden={!sidebarOpen}
         >
           <div className="dashboard-sidebar__instruments-block" ref={instrumentsRef}>
@@ -1480,6 +1497,26 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
             </svg>
             Prediction history
           </button>
+
+          {user?.role === 'ADMIN' ? (
+            <button
+              type="button"
+              className="dashboard-sidebar__btn"
+              onClick={() => {
+                setUserMgmtOpen(true);
+                setSidebarOpen(false);
+              }}
+              aria-haspopup="dialog"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+              </svg>
+              User management
+            </button>
+          ) : null}
 
           <button type="button" className="dashboard-sidebar__btn" onClick={() => setSettingsOpen(true)} aria-haspopup="dialog">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -1651,8 +1688,16 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
       {settingsOpen ? (
         <div
           className="dashboard-settings-backdrop"
-          onClick={() => setSettingsOpen(false)}
-          onKeyDown={(e) => e.key === 'Escape' && setSettingsOpen(false)}
+          onClick={() => {
+            setAiPromptOpen(false);
+            setSettingsOpen(false);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              setAiPromptOpen(false);
+              setSettingsOpen(false);
+            }
+          }}
           role="presentation"
         >
           <div
@@ -1662,22 +1707,83 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
             aria-modal="true"
             aria-labelledby="settings-dialog-title"
           >
-            <button type="button" className="dashboard-settings-panel__close" onClick={() => setSettingsOpen(false)} aria-label="Close settings">
+            <button
+              type="button"
+              className="dashboard-settings-panel__close"
+              onClick={() => {
+                setAiPromptOpen(false);
+                setSettingsOpen(false);
+              }}
+              aria-label="Close settings"
+            >
               ×
             </button>
             <h2 id="settings-dialog-title">Settings</h2>
             <p style={{ fontSize: 14, color: '#64748b', lineHeight: 1.5, margin: 0 }}>
               Notification and display preferences can live here. API base URL uses <code style={{ fontSize: 12, background: '#f1f5f9', padding: '2px 6px', borderRadius: 4 }}>NEXT_PUBLIC_API_URL</code> when set.
             </p>
-            {user?.role === 'ADMIN' && (
-              <>
-                <AdminUsersSection
-                  currentEmail={user?.email}
-                  onSelfRoleChanged={role => onUserUpdate?.({ role })}
-                />
-                <AdminPromptSection />
-              </>
-            )}
+            {user?.role === 'ADMIN' ? (
+              <button
+                type="button"
+                className="dashboard-settings-ai-btn"
+                onClick={() => setAiPromptOpen(true)}
+              >
+                AI prompt management
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {userMgmtOpen && user?.role === 'ADMIN' ? (
+        <div
+          className="dashboard-settings-backdrop"
+          onClick={() => setUserMgmtOpen(false)}
+          onKeyDown={(e) => e.key === 'Escape' && setUserMgmtOpen(false)}
+          role="presentation"
+        >
+          <div
+            className="dashboard-settings-panel dashboard-settings-panel--wide"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="user-mgmt-dialog-title"
+          >
+            <button type="button" className="dashboard-settings-panel__close" onClick={() => setUserMgmtOpen(false)} aria-label="Close user management">
+              ×
+            </button>
+            <h2 id="user-mgmt-dialog-title">User management</h2>
+            <p style={{ fontSize: 13, color: '#64748b', lineHeight: 1.5, margin: '0 0 12px' }}>
+              Change roles for registered accounts. The last admin cannot be demoted.
+            </p>
+            <AdminUsersSection
+              embedded
+              currentEmail={user?.email}
+              onSelfRoleChanged={role => onUserUpdate?.({ role })}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      {aiPromptOpen && user?.role === 'ADMIN' ? (
+        <div
+          className="dashboard-settings-backdrop dashboard-settings-backdrop--nested"
+          onClick={() => setAiPromptOpen(false)}
+          onKeyDown={(e) => e.key === 'Escape' && setAiPromptOpen(false)}
+          role="presentation"
+        >
+          <div
+            className="dashboard-settings-panel dashboard-settings-panel--prompt"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ai-prompt-dialog-title"
+          >
+            <button type="button" className="dashboard-settings-panel__close" onClick={() => setAiPromptOpen(false)} aria-label="Close AI prompt management">
+              ×
+            </button>
+            <h2 id="ai-prompt-dialog-title">AI prompt management</h2>
+            <AdminPromptSection embedded />
           </div>
         </div>
       ) : null}
