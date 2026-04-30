@@ -149,6 +149,21 @@ const api = {
     if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || 'Failed to save prompt'); }
     return res.json();
   },
+  async getAiTools() {
+    const res = await fetch(`${API}/api/admin/ai-tools`, {
+      headers: { Authorization: 'Bearer ' + this.token },
+    });
+    if (!res.ok) return [];
+    return res.json();
+  },
+  async activateAiModel(id) {
+    const res = await fetch(`${API}/api/admin/ai-models/${id}/activate`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + this.token },
+    });
+    if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || 'Failed to activate model'); }
+    return res.json();
+  },
   async listAdminUsers(page, size) {
     const params = new URLSearchParams({ page: page ?? 0, size: size ?? 50 });
     const res = await fetch(`${API}/api/admin/users?${params}`, {
@@ -737,7 +752,7 @@ function AiReasonTicker({ text, attached = false }) {
 }
 
 // ── Profile menu ──
-function ProfileMenu({ userName, onLogout }) {
+function ProfileMenu({ userName, onLogout, onOpenSettings }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef(null);
   useEffect(() => {
@@ -760,6 +775,18 @@ function ProfileMenu({ userName, onLogout }) {
       </div>
       {open && (
         <div className="profile-menu__dropdown" role="menu">
+          <button
+            type="button"
+            className="profile-menu__settings"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onOpenSettings?.();
+            }}
+          >
+            Settings
+          </button>
+          <div className="profile-menu__divider" aria-hidden="true" />
           <button type="button" className="profile-menu__signout" role="menuitem" onClick={() => { setOpen(false); onLogout(); }}>Sign out</button>
         </div>
       )}
@@ -848,12 +875,16 @@ function PredictionHistoryDialog({ open, onClose }) {
         aria-modal="true"
         aria-labelledby="hist-dialog-title"
       >
-      <header className="prediction-history-shell__header">
-        <div className="prediction-history-shell__title-block">
-          <h2 id="hist-dialog-title" className="prediction-history-shell__title">Prediction History</h2>
-          <p className="prediction-history-shell__subtitle">Historical AI signals with market outcomes</p>
-        </div>
-        <button type="button" className="prediction-history-shell__close" onClick={onClose} aria-label="Close">
+      <header className="prediction-history-shell__header prediction-history-shell__header--centered">
+        <h2 id="hist-dialog-title" className="prediction-history-shell__title prediction-history-shell__title--center">
+          Prediction metrics
+        </h2>
+        <button
+          type="button"
+          className="prediction-history-shell__close prediction-history-shell__close--floating"
+          onClick={onClose}
+          aria-label="Close"
+        >
           ×
         </button>
       </header>
@@ -899,7 +930,7 @@ function PredictionHistoryDialog({ open, onClose }) {
             <table className="prediction-history-shell__table">
               <thead>
                 <tr className="prediction-history-shell__thead-row">
-                  {['Time (IST)', 'Horizon', 'Signal', 'Conf', 'Entry', 'Stop Loss', 'Target', 'R:R', 'Outcome', 'Actual Close', 'P&L'].map(col => (
+                  {['Time (IST)', 'Horizon', 'Signal', 'Conf', 'Entry', 'Stop Loss', 'Target', 'R:R', 'AI Tool', 'AI Model', 'Outcome', 'Actual Close', 'P&L'].map(col => (
                     <th key={col} className="prediction-history-shell__th">{col}</th>
                   ))}
                 </tr>
@@ -926,6 +957,10 @@ function PredictionHistoryDialog({ open, onClose }) {
                       <td style={{ padding: '8px 10px', color: '#dc2626', whiteSpace: 'nowrap' }}>{p.stopLoss != null ? fmtINR(p.stopLoss) : '—'}</td>
                       <td style={{ padding: '8px 10px', color: '#16a34a', whiteSpace: 'nowrap' }}>{p.targetSensex != null ? fmtINR(p.targetSensex) : '—'}</td>
                       <td style={{ padding: '8px 10px', color: '#475569' }}>{p.riskReward != null ? Number(p.riskReward).toFixed(2) : '—'}</td>
+                      <td style={{ padding: '8px 10px', color: '#475569', whiteSpace: 'nowrap' }}>{p.aiTool || '—'}</td>
+                      <td style={{ padding: '8px 10px', color: '#64748b', whiteSpace: 'nowrap', fontSize: 12 }}>
+                        {p.aiModel || '—'}
+                      </td>
                       <td style={{ padding: '8px 10px', textAlign: 'center', verticalAlign: 'middle' }}>
                         <span
                           title="Pending"
@@ -963,7 +998,7 @@ function PredictionHistoryDialog({ open, onClose }) {
       {!loading && total > 0 ? (
         <footer className="prediction-history-shell__footer">
           <span className="prediction-history-shell__footer-meta">
-            {total} prediction{total !== 1 ? 's' : ''} · page {page + 1} of {totalPages}
+            Page {page + 1} of {Math.max(1, totalPages)}
           </span>
           <div className="prediction-history-shell__pager">
             <button
@@ -1109,30 +1144,508 @@ STRICT RULES:
   3. stop_loss is mandatory and must never equal entry_price or target_price.
   4. Output ONLY valid JSON — no extra text, no markdown.`;
 
-function AdminPromptSection({ embedded }) {
-  const [promptText, setPromptText] = useState('');
-  const [label, setLabel] = useState('');
-  const [activePrompt, setActivePrompt] = useState(null);
-  const [history, setHistory] = useState([]);
-  const [saving, setSaving] = useState(false);
-  const [status, setStatus] = useState(null); // { type: 'ok'|'error', msg }
-  const [showHistory, setShowHistory] = useState(false);
+function pickPromptText(p) {
+  if (!p) return null;
+  const t = p.promptText ?? p.prompt_text;
+  return typeof t === 'string' && t.trim() ? t : null;
+}
+
+function formatPromptHistoryTimestamp(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  });
+}
+
+/** Nested modal: read-only full prompt for one history row */
+function PromptTextDetailDialog({ row, onClose, onUseInEditor }) {
+  if (!row) return null;
+  const text = pickPromptText(row) || '';
+  const editor = row.createdBy ?? row.created_by ?? '—';
+  const label = row.label ?? '—';
+  const when = formatPromptHistoryTimestamp(row.createdAt ?? row.created_at);
+
+  return (
+    <div className="prompt-detail-overlay" onClick={onClose} role="presentation">
+      <div
+        className="prompt-detail-dialog"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="prompt-detail-title"
+      >
+        <div className="prompt-detail-dialog__header">
+          <div>
+            <h3 id="prompt-detail-title" className="prompt-detail-dialog__title">
+              {label}
+            </h3>
+            <p className="prompt-detail-dialog__meta">
+              Editor: <strong style={{ color: '#334155' }}>{editor}</strong>
+              {' · '}
+              {when}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="prediction-history-shell__close"
+            onClick={onClose}
+            aria-label="Close prompt preview"
+          >
+            ×
+          </button>
+        </div>
+        <div className="prompt-detail-dialog__body">
+          <label htmlFor="prompt-detail-body" className="sr-only">
+            Prompt text
+          </label>
+          <textarea
+            id="prompt-detail-body"
+            readOnly
+            value={text}
+            className="prompt-detail-dialog__textarea"
+            spellCheck={false}
+            aria-label="Full prompt text"
+          />
+          <div className="prompt-detail-dialog__actions">
+            {typeof onUseInEditor === 'function' ? (
+              <button
+                type="button"
+                className="prediction-history-shell__page-btn"
+                onClick={() => onUseInEditor({ label, promptText: text, row })}
+              >
+                Use in editor
+              </button>
+            ) : null}
+            <button type="button" className="prediction-history-shell__page-btn" onClick={onClose}>
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const PROMPT_HISTORY_PAGE_SIZE = 10;
+
+function PromptHistoryDialog({ open, onClose, onUseInEditor }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(0);
+  const [detailRow, setDetailRow] = useState(null);
 
   useEffect(() => {
-    api.getActivePrompt().then(p => {
-      if (p && p.promptText) {
-        setActivePrompt(p);
-        setPromptText(p.promptText);
-        setLabel(p.label || '');
-      }
-    }).catch(() => {});
+    if (!open) return;
+    setPage(0);
+    setDetailRow(null);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    setLoading(true);
+    api
+      .getPromptHistory(page, PROMPT_HISTORY_PAGE_SIZE)
+      .then(setData)
+      .catch(() => setData({ prompts: [], totalElements: 0, totalPages: 0 }))
+      .finally(() => setLoading(false));
+  }, [open, page]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      if (detailRow) setDetailRow(null);
+      else onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, detailRow, onClose]);
+
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  if (!open) return null;
+
+  const prompts = data?.prompts ?? [];
+  const totalElements = data?.totalElements ?? 0;
+  const totalPages = Math.max(1, data?.totalPages ?? 1);
+
+  function handleUseInEditor(payload) {
+    if (typeof onUseInEditor === 'function') onUseInEditor(payload);
+    setDetailRow(null);
+    onClose();
+  }
+
+  return (
+    <>
+      <div className="prediction-history-overlay" onClick={onClose} role="presentation">
+        <div
+          className="prediction-history-dialog"
+          style={{ maxWidth: 720 }}
+          onClick={(e) => e.stopPropagation()}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="prompt-hist-dialog-title"
+        >
+          <header className="prediction-history-shell__header prediction-history-shell__header--centered">
+            <h2 id="prompt-hist-dialog-title" className="prediction-history-shell__title prediction-history-shell__title--center">
+              Prompt history
+            </h2>
+            <button
+              type="button"
+              className="prediction-history-shell__close prediction-history-shell__close--floating"
+              onClick={onClose}
+              aria-label="Close"
+            >
+              ×
+            </button>
+          </header>
+
+          <div className="prediction-history-shell__table-scroll">
+            {loading ? (
+              <div className="prediction-history-shell__center-msg">Loading prompt history…</div>
+            ) : prompts.length === 0 ? (
+              <div className="prediction-history-shell__empty">
+                <span style={{ fontSize: 28 }}>📭</span>
+                <span style={{ fontSize: 13, color: '#94a3b8', textAlign: 'center', padding: '0 16px' }}>
+                  No prompt versions saved yet.
+                </span>
+              </div>
+            ) : (
+              <table className="prediction-history-shell__table">
+                <thead>
+                  <tr className="prediction-history-shell__thead-row">
+                    {['Editor', 'Label', 'Date & time (IST)'].map((col) => (
+                      <th key={col} className="prediction-history-shell__th">
+                        {col}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {prompts.map((h, i) => {
+                    const editor = h.createdBy ?? h.created_by ?? '—';
+                    const lab = h.label ?? '—';
+                    const when = formatPromptHistoryTimestamp(h.createdAt ?? h.created_at);
+                    const active = h.isActive ?? h.is_active;
+                    return (
+                      <tr
+                        key={h.id ?? i}
+                        style={{
+                          borderBottom: '1px solid #f1f5f9',
+                          background: i % 2 === 0 ? '#fff' : '#fafafa',
+                        }}
+                      >
+                        <td style={{ padding: '10px 12px', color: '#334155' }}>{editor}</td>
+                        <td style={{ padding: '10px 12px' }}>
+                          <button
+                            type="button"
+                            className="prompt-history-label-btn"
+                            onClick={() => setDetailRow(h)}
+                          >
+                            {lab}
+                          </button>
+                          {active ? (
+                            <span
+                              style={{
+                                marginLeft: 8,
+                                fontSize: 10,
+                                fontWeight: 700,
+                                color: '#16a34a',
+                                background: '#dcfce7',
+                                padding: '2px 8px',
+                                borderRadius: 10,
+                                verticalAlign: 'middle',
+                              }}
+                            >
+                              ACTIVE
+                            </span>
+                          ) : null}
+                        </td>
+                        <td style={{ padding: '10px 12px', color: '#475569', whiteSpace: 'nowrap' }}>{when}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          {!loading && totalElements > 0 ? (
+            <footer className="prediction-history-shell__footer">
+              <span className="prediction-history-shell__footer-meta">
+                {totalElements} version{totalElements === 1 ? '' : 's'} · Page {page + 1} of {totalPages}
+              </span>
+              <div className="prediction-history-shell__pager">
+                <button
+                  type="button"
+                  className="prediction-history-shell__page-btn"
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  disabled={page === 0}
+                >
+                  ← Prev
+                </button>
+                <button
+                  type="button"
+                  className="prediction-history-shell__page-btn"
+                  onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                  disabled={page >= totalPages - 1}
+                >
+                  Next →
+                </button>
+              </div>
+            </footer>
+          ) : null}
+        </div>
+      </div>
+
+      {detailRow ? (
+        <PromptTextDetailDialog
+          row={detailRow}
+          onClose={() => setDetailRow(null)}
+          onUseInEditor={
+            typeof onUseInEditor === 'function'
+              ? ({ promptText, label: lb }) =>
+                  handleUseInEditor({ promptText, label: lb })
+              : undefined
+          }
+        />
+      ) : null}
+    </>
+  );
+}
+
+function AdminAiModelSection() {
+  const [tools, setTools] = useState([]);
+  const [selectedTool, setSelectedTool] = useState(null);
+  const [activating, setActivating] = useState(null);
+  const [status, setStatus] = useState(null);
+  const [confirmModel, setConfirmModel] = useState(null); // { id, displayName, modelId }
+
+  useEffect(() => {
+    api.getAiTools()
+      .then(data => {
+        setTools(data);
+        const firstEnabled = data.find(t => t.enabled);
+        if (firstEnabled) setSelectedTool(firstEnabled.name);
+      })
+      .catch(() => {});
   }, []);
 
-  async function loadHistory() {
-    const data = await api.getPromptHistory(0, 10).catch(() => null);
-    if (data) setHistory(data.prompts || []);
-    setShowHistory(true);
+  async function handleActivate(modelId) {
+    setConfirmModel(null);
+    setActivating(modelId);
+    setStatus(null);
+    try {
+      await api.activateAiModel(modelId);
+      const updated = await api.getAiTools();
+      setTools(updated);
+      setStatus({ type: 'ok', msg: 'Model activated. All future predictions will use this model.' });
+    } catch (e) {
+      setStatus({ type: 'error', msg: e.message });
+    } finally {
+      setActivating(null);
+    }
   }
+
+  const activeTool = tools.find(t => t.name === selectedTool);
+
+  return (
+    <div>
+      {confirmModel && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+            zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+          onClick={() => setConfirmModel(null)}
+          role="presentation"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="confirm-model-title"
+            style={{
+              background: '#fff', borderRadius: 12, padding: 28, maxWidth: 420, width: '90%',
+              boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
+            }}
+          >
+            <h3 id="confirm-model-title" style={{ margin: '0 0 12px', fontSize: 16, fontWeight: 700, color: '#0f172a' }}>
+              Change AI Model?
+            </h3>
+            <p style={{ fontSize: 13, color: '#475569', lineHeight: 1.5, margin: '0 0 20px' }}>
+              <strong style={{ color: '#0f172a' }}>{confirmModel.displayName}</strong>{' '}
+              (<code style={{ fontSize: 11, background: '#f1f5f9', padding: '1px 5px', borderRadius: 4 }}>{confirmModel.modelId}</code>)
+              {' '}will be used for all new predictions across the app. You can change it again here anytime.
+            </p>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setConfirmModel(null)}
+                style={{
+                  padding: '8px 20px', borderRadius: 7, border: '1px solid #e2e8f0',
+                  background: '#fff', color: '#475569', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleActivate(confirmModel.id)}
+                style={{
+                  padding: '8px 20px', borderRadius: 7, border: 'none',
+                  background: '#4f46e5', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                }}
+              >
+                Proceed
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <p style={{ margin: '0 0 14px', fontSize: 12, color: '#64748b', lineHeight: 1.5 }}>
+        Select the AI provider and model used for all future predictions. Only enabled providers are selectable.
+      </p>
+
+      <p style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 8px' }}>
+        AI Provider
+      </p>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20 }}>
+        {tools.map(tool => {
+          const isSelected = selectedTool === tool.name;
+          return (
+            <button
+              key={tool.name}
+              type="button"
+              disabled={!tool.enabled}
+              onClick={() => tool.enabled && setSelectedTool(tool.name)}
+              style={{
+                padding: '10px 16px',
+                borderRadius: 8,
+                border: isSelected ? '2px solid #4f46e5' : '1.5px solid #e2e8f0',
+                background: isSelected ? '#eef2ff' : tool.enabled ? '#fff' : '#f8fafc',
+                cursor: tool.enabled ? 'pointer' : 'not-allowed',
+                opacity: tool.enabled ? 1 : 0.5,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 4,
+                minWidth: 100,
+                transition: 'border-color 0.15s',
+              }}
+            >
+              <span style={{ fontSize: 13, fontWeight: 600, color: isSelected ? '#4f46e5' : '#1e293b' }}>
+                {tool.displayName}
+              </span>
+              <span style={{
+                fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 10,
+                background: tool.enabled ? '#dcfce7' : '#f1f5f9',
+                color: tool.enabled ? '#16a34a' : '#94a3b8',
+              }}>
+                {tool.enabled ? 'AVAILABLE' : 'COMING SOON'}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {activeTool && (
+        <>
+          <p style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 8px' }}>
+            {activeTool.displayName} Models
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {(activeTool.models || []).map(model => (
+              <div
+                key={model.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '10px 14px',
+                  borderRadius: 8,
+                  border: model.isActive ? '1.5px solid #4f46e5' : '1px solid #e2e8f0',
+                  background: model.isActive ? '#eef2ff' : '#fff',
+                  opacity: model.enabled ? 1 : 0.5,
+                }}
+              >
+                <div>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>{model.displayName}</span>
+                  <span style={{ fontSize: 11, color: '#94a3b8', marginLeft: 8 }}>{model.modelId}</span>
+                </div>
+                {model.isActive ? (
+                  <span style={{ fontSize: 10, fontWeight: 700, color: '#4f46e5', background: '#e0e7ff', padding: '3px 10px', borderRadius: 10 }}>
+                    ACTIVE
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={!model.enabled || activating === model.id}
+                    onClick={() => setConfirmModel({ id: model.id, displayName: model.displayName, modelId: model.modelId })}
+                    style={{
+                      padding: '5px 14px', borderRadius: 6, border: 'none',
+                      background: activating === model.id ? '#94a3b8' : '#4f46e5',
+                      color: '#fff', fontSize: 12, fontWeight: 600,
+                      cursor: model.enabled && activating !== model.id ? 'pointer' : 'not-allowed',
+                    }}
+                  >
+                    {activating === model.id ? 'Activating…' : 'Activate'}
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {status && (
+        <p style={{ fontSize: 12, margin: '12px 0 0', color: status.type === 'ok' ? '#16a34a' : '#dc2626', fontWeight: 500 }}>
+          {status.type === 'ok' ? '✓ ' : '✗ '}{status.msg}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function AdminPromptSection({ embedded }) {
+  const [promptText, setPromptText] = useState(DEFAULT_PROMPT_HINT);
+  const [label, setLabel] = useState('');
+  const [activePrompt, setActivePrompt] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState(null); // { type: 'ok'|'error', msg }
+  const [promptHistoryOpen, setPromptHistoryOpen] = useState(false);
+
+  useEffect(() => {
+    api.getActivePrompt()
+      .then((p) => {
+        if (p && p.active === false) return;
+        const text = pickPromptText(p);
+        if (text) {
+          setActivePrompt(p);
+          setPromptText(text);
+          setLabel((p.label && String(p.label)) || '');
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   async function handleSave() {
     if (!label.trim()) { setStatus({ type: 'error', msg: 'Label is required.' }); return; }
@@ -1185,8 +1698,10 @@ function AdminPromptSection({ embedded }) {
       <textarea
         value={promptText}
         onChange={e => setPromptText(e.target.value)}
-        placeholder={DEFAULT_PROMPT_HINT}
         rows={12}
+        spellCheck="false"
+        autoComplete="off"
+        aria-label="Active prompt template, editable"
         style={{
           width: '100%', padding: '8px 10px', borderRadius: 6, fontSize: 12, lineHeight: 1.6, fontFamily: 'monospace',
           border: hasMissingVar ? '1.5px solid #ef4444' : '1px solid #cbd5e1',
@@ -1217,38 +1732,74 @@ function AdminPromptSection({ embedded }) {
         </button>
         <button
           type="button"
-          onClick={showHistory ? () => setShowHistory(false) : loadHistory}
+          onClick={() => setPromptHistoryOpen(true)}
           style={{ padding: '8px 14px', borderRadius: 6, border: '1px solid #e2e8f0', background: '#fff', cursor: 'pointer', fontSize: 12, color: '#475569' }}
         >
-          {showHistory ? 'Hide history' : 'View history'}
+          View history
         </button>
       </div>
-      {showHistory && history.length > 0 && (
-        <div style={{ marginTop: 14, borderTop: '1px solid #f1f5f9', paddingTop: 10 }}>
-          <p style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', margin: '0 0 8px', letterSpacing: '0.05em' }}>Recent prompts</p>
-          {history.map(h => (
-            <div key={h.id} style={{ marginBottom: 10, padding: '8px 12px', border: '1px solid #e2e8f0', borderRadius: 6, background: h.isActive ? '#f0fdf4' : '#fafafa' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                <span style={{ fontSize: 12, fontWeight: 600, color: '#1e293b' }}>{h.label}</span>
-                {h.isActive && <span style={{ fontSize: 10, fontWeight: 700, color: '#16a34a', background: '#dcfce7', padding: '2px 8px', borderRadius: 10 }}>ACTIVE</span>}
-              </div>
-              <p style={{ fontSize: 10, color: '#94a3b8', margin: '0 0 6px' }}>
-                {h.createdBy} · {h.createdAt ? new Date(h.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : ''}
-              </p>
-              <button
-                type="button"
-                onClick={() => { setPromptText(h.promptText); setLabel(h.label + ' (copy)'); setShowHistory(false); }}
-                style={{ fontSize: 11, color: '#4f46e5', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
-              >
-                Load into editor
-              </button>
-            </div>
+      <PromptHistoryDialog
+        open={promptHistoryOpen}
+        onClose={() => setPromptHistoryOpen(false)}
+        onUseInEditor={({ promptText: t, label: lb }) => {
+          if (t) setPromptText(t);
+          const base = lb && lb !== '—' ? String(lb).trim() : '';
+          setLabel(base ? `${base} (copy)` : '');
+          setStatus({ type: 'ok', msg: 'Loaded prompt into editor. Save to activate if you want this version live.' });
+        }}
+      />
+    </div>
+  );
+}
+
+// ── AI Management Modal ──
+function AiManagementModal({ onClose }) {
+  const [activeTab, setActiveTab] = useState('prompt');
+
+  return (
+    <div
+      className="dashboard-settings-backdrop dashboard-settings-backdrop--nested"
+      onClick={onClose}
+      onKeyDown={(e) => e.key === 'Escape' && onClose()}
+      role="presentation"
+    >
+      <div
+        className="dashboard-settings-panel dashboard-settings-panel--prompt"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ai-mgmt-dialog-title"
+      >
+        <button type="button" className="dashboard-settings-panel__close" onClick={onClose} aria-label="Close AI management">
+          ×
+        </button>
+        <h2 id="ai-mgmt-dialog-title" style={{ marginBottom: 16 }}>AI management</h2>
+
+        <div style={{ display: 'flex', gap: 6, marginBottom: 20, borderBottom: '1px solid #e2e8f0', paddingBottom: 12 }}>
+          {[{ key: 'prompt', label: 'Prompt' }, { key: 'model', label: 'AI Model' }].map(({ key, label }) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setActiveTab(key)}
+              style={{
+                padding: '6px 18px',
+                borderRadius: 6,
+                border: 'none',
+                cursor: 'pointer',
+                fontWeight: activeTab === key ? 700 : 400,
+                fontSize: 13,
+                background: activeTab === key ? '#4f46e5' : '#f1f5f9',
+                color: activeTab === key ? '#fff' : '#475569',
+                transition: 'background 0.15s',
+              }}
+            >
+              {label}
+            </button>
           ))}
         </div>
-      )}
-      {showHistory && history.length === 0 && (
-        <p style={{ fontSize: 12, color: '#94a3b8', marginTop: 10 }}>No prompt history yet.</p>
-      )}
+
+        {activeTab === 'prompt' ? <AdminPromptSection embedded /> : <AdminAiModelSection />}
+      </div>
     </div>
   );
 }
@@ -1450,124 +2001,126 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
           ref={sidebarRef}
           id="dashboard-sidebar"
           className={'dashboard-sidebar' + (sidebarOpen ? ' dashboard-sidebar--open' : '')}
-          aria-label="Instruments, prediction history, user management, and settings"
+          aria-label="Instruments, history, and user management"
           aria-hidden={!sidebarOpen}
         >
-          <div className="dashboard-sidebar__instruments-block" ref={instrumentsRef}>
-            <button
-              type="button"
-              className={'dashboard-sidebar__btn' + (instrumentsOpen ? ' dashboard-sidebar__btn--active' : '')}
-              onClick={() => setInstrumentsOpen((o) => !o)}
-              aria-expanded={instrumentsOpen}
-              aria-controls="instruments-panel"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" />
-                <line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" />
-                <line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" />
-                <line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" />
-                <line x1="17" y1="16" x2="23" y2="16" />
-              </svg>
-              Instruments
-            </button>
-            {instrumentsOpen ? (
-              <div id="instruments-panel" className="dashboard-sidebar-popover dashboard-sidebar-popover--instruments" role="region" aria-label="Market instruments">
-                <div className="dashboard-instrument-list__heading">Market instruments</div>
-                <ul className="dashboard-instrument-list">
-                  {MARKET_INSTRUMENTS.map((inst) => {
-                    const isActive = activeInstrumentId === inst.id;
-                    if (!inst.enabled) {
-                      return (
-                        <li key={inst.id}>
-                          <button
-                            type="button"
-                            className="dashboard-instrument-list__item dashboard-instrument-list__item--disabled"
-                            disabled
-                            title="Coming soon"
-                          >
-                            <span className="dashboard-instrument-list__text">
-                              <span className="dashboard-instrument-list__name">{inst.name}</span>
-                              <span className="dashboard-instrument-list__meta">
-                                {inst.symbol} · {inst.exchange}
-                              </span>
-                            </span>
-                          </button>
-                        </li>
-                      );
-                    }
-                    return (
-                      <li key={inst.id}>
-                        <button
-                          type="button"
-                          className={
-                            'dashboard-instrument-list__item' +
-                            (isActive ? ' dashboard-instrument-list__item--active' : '')
+          <nav className="dashboard-sidebar-nav" aria-label="Dashboard menu">
+            <ul className="dashboard-sidebar-nav__list">
+              <li className="dashboard-sidebar-nav__item">
+                <div className="dashboard-sidebar__instruments-block" ref={instrumentsRef}>
+                  <button
+                    type="button"
+                    className={'dashboard-sidebar-nav__link' + (instrumentsOpen ? ' dashboard-sidebar-nav__link--active' : '')}
+                    onClick={() => setInstrumentsOpen((o) => !o)}
+                    aria-expanded={instrumentsOpen}
+                    aria-controls="instruments-panel"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                      <line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" />
+                      <line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" />
+                      <line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" />
+                      <line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" />
+                      <line x1="17" y1="16" x2="23" y2="16" />
+                    </svg>
+                    Instruments
+                  </button>
+                  {instrumentsOpen ? (
+                    <div id="instruments-panel" className="dashboard-sidebar-popover dashboard-sidebar-popover--instruments" role="region" aria-label="Market instruments">
+                      <div className="dashboard-instrument-list__heading">Market instruments</div>
+                      <ul className="dashboard-instrument-list">
+                        {MARKET_INSTRUMENTS.map((inst) => {
+                          const isActive = activeInstrumentId === inst.id;
+                          if (!inst.enabled) {
+                            return (
+                              <li key={inst.id}>
+                                <button
+                                  type="button"
+                                  className="dashboard-instrument-list__item dashboard-instrument-list__item--disabled"
+                                  disabled
+                                  title="Coming soon"
+                                >
+                                  <span className="dashboard-instrument-list__text">
+                                    <span className="dashboard-instrument-list__name">{inst.name}</span>
+                                    <span className="dashboard-instrument-list__meta">
+                                      {inst.symbol} · {inst.exchange}
+                                    </span>
+                                  </span>
+                                </button>
+                              </li>
+                            );
                           }
-                          onClick={() => setActiveInstrumentId(inst.id)}
-                          aria-pressed={isActive}
-                        >
-                          <span className="dashboard-instrument-list__text">
-                            <span className="dashboard-instrument-list__name">{inst.name}</span>
-                            <span className="dashboard-instrument-list__meta">
-                              {inst.symbol} · {inst.exchange}
-                            </span>
-                          </span>
-                          {isActive ? (
-                            <span className="dashboard-instrument-list__check" aria-hidden>
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                <polyline points="20 6 9 17 4 12" />
-                              </svg>
-                            </span>
-                          ) : null}
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            ) : null}
-          </div>
+                          return (
+                            <li key={inst.id}>
+                              <button
+                                type="button"
+                                className={
+                                  'dashboard-instrument-list__item' +
+                                  (isActive ? ' dashboard-instrument-list__item--active' : '')
+                                }
+                                onClick={() => setActiveInstrumentId(inst.id)}
+                                aria-pressed={isActive}
+                              >
+                                <span className="dashboard-instrument-list__text">
+                                  <span className="dashboard-instrument-list__name">{inst.name}</span>
+                                  <span className="dashboard-instrument-list__meta">
+                                    {inst.symbol} · {inst.exchange}
+                                  </span>
+                                </span>
+                                {isActive ? (
+                                  <span className="dashboard-instrument-list__check" aria-hidden>
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                      <polyline points="20 6 9 17 4 12" />
+                                    </svg>
+                                  </span>
+                                ) : null}
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  ) : null}
+                </div>
+              </li>
 
-          <button
-            type="button"
-            className="dashboard-sidebar__btn"
-            onClick={() => setHistoryOpen(true)}
-            aria-haspopup="dialog"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <circle cx="12" cy="12" r="10" />
-              <polyline points="12 6 12 12 16 14" />
-            </svg>
-            Prediction history
-          </button>
+              <li className="dashboard-sidebar-nav__item">
+                <button
+                  type="button"
+                  className="dashboard-sidebar-nav__link"
+                  onClick={() => setHistoryOpen(true)}
+                  aria-haspopup="dialog"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <circle cx="12" cy="12" r="10" />
+                    <polyline points="12 6 12 12 16 14" />
+                  </svg>
+                  History
+                </button>
+              </li>
 
-          {user?.role === 'ADMIN' ? (
-            <button
-              type="button"
-              className="dashboard-sidebar__btn"
-              onClick={() => {
-                setUserMgmtOpen(true);
-                setSidebarOpen(false);
-              }}
-              aria-haspopup="dialog"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-                <circle cx="9" cy="7" r="4" />
-                <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
-                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-              </svg>
-              User management
-            </button>
-          ) : null}
-
-          <button type="button" className="dashboard-sidebar__btn" onClick={() => setSettingsOpen(true)} aria-haspopup="dialog">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <circle cx="12" cy="12" r="3" />
-              <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
-            </svg>
-            Settings
-          </button>
+              {user?.role === 'ADMIN' ? (
+                <li className="dashboard-sidebar-nav__item">
+                  <button
+                    type="button"
+                    className="dashboard-sidebar-nav__link"
+                    onClick={() => {
+                      setUserMgmtOpen(true);
+                      setSidebarOpen(false);
+                    }}
+                    aria-haspopup="dialog"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                      <circle cx="9" cy="7" r="4" />
+                      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+                      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                    </svg>
+                    User management
+                  </button>
+                </li>
+              ) : null}
+            </ul>
+          </nav>
         </aside>
 
         {sidebarOpen ? (
@@ -1602,7 +2155,7 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
             </button>
             <SessionBadge session={session} minutesToCloseVal={minsToClose} />
           </div>
-          <ProfileMenu userName={user.name} onLogout={onLogout} />
+          <ProfileMenu userName={user.name} onLogout={onLogout} onOpenSettings={() => setSettingsOpen(true)} />
         </div>
         <LiveBanner livePrice={livePrice} connected={connected} connectionError={connectionError} />
         <SquareOffBanner minutesToCloseVal={minsToClose} />
@@ -1768,7 +2321,14 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
                 className="dashboard-settings-ai-btn"
                 onClick={() => setAiPromptOpen(true)}
               >
-                AI prompt management
+                <span className="dashboard-settings-ai-btn__inner">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <rect x="4" y="4" width="16" height="16" rx="2" />
+                    <rect x="9" y="9" width="6" height="6" />
+                    <path d="M9 2v2M15 2v2M9 20v2M15 20v2M20 9h2M20 14h2M2 9h2M2 14h2" />
+                  </svg>
+                  <span>AI management</span>
+                </span>
               </button>
             ) : null}
           </div>
@@ -1806,26 +2366,7 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
       ) : null}
 
       {aiPromptOpen && user?.role === 'ADMIN' ? (
-        <div
-          className="dashboard-settings-backdrop dashboard-settings-backdrop--nested"
-          onClick={() => setAiPromptOpen(false)}
-          onKeyDown={(e) => e.key === 'Escape' && setAiPromptOpen(false)}
-          role="presentation"
-        >
-          <div
-            className="dashboard-settings-panel dashboard-settings-panel--prompt"
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="ai-prompt-dialog-title"
-          >
-            <button type="button" className="dashboard-settings-panel__close" onClick={() => setAiPromptOpen(false)} aria-label="Close AI prompt management">
-              ×
-            </button>
-            <h2 id="ai-prompt-dialog-title">AI prompt management</h2>
-            <AdminPromptSection embedded />
-          </div>
-        </div>
+        <AiManagementModal onClose={() => setAiPromptOpen(false)} />
       ) : null}
     </div>
   );
