@@ -76,6 +76,15 @@ const api = {
     }
     return data;
   },
+  /** Authoritative name/email/role from DB (JWT does not carry role). */
+  async fetchMe() {
+    const res = await fetch(API + '/api/auth/me', {
+      headers: { Authorization: 'Bearer ' + this.token },
+    });
+    if (res.status === 401) throw new Error('SESSION_EXPIRED');
+    if (!res.ok) throw new Error('Failed to load profile');
+    return res.json();
+  },
   async register(name, email, password) {
     const res = await fetch(API + '/api/auth/register', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1683,9 +1692,34 @@ export default function Home() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    setUser(api.init());
-    setAccessToken(api.token);
-    setReady(true);
+    let cancelled = false;
+    async function boot() {
+      const fromStorage = api.init();
+      setAccessToken(api.token);
+      if (api.token) {
+        try {
+          const profile = await api.fetchMe();
+          if (cancelled) return;
+          const next = { name: profile.name, email: profile.email, role: profile.role || 'USER' };
+          setUser(next);
+          localStorage.setItem('user', JSON.stringify(next));
+        } catch (e) {
+          if (cancelled) return;
+          if (e.message === 'SESSION_EXPIRED') {
+            api.logout();
+            setUser(null);
+            setAccessToken(null);
+          } else {
+            setUser(fromStorage);
+          }
+        }
+      } else {
+        setUser(fromStorage);
+      }
+      if (!cancelled) setReady(true);
+    }
+    boot();
+    return () => { cancelled = true; };
   }, []);
 
   const logout = () => { api.logout(); setUser(null); setAccessToken(null); };
