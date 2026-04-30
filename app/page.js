@@ -1762,9 +1762,6 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
               ×
             </button>
             <h2 id="settings-dialog-title">Settings</h2>
-            <p style={{ fontSize: 14, color: '#64748b', lineHeight: 1.5, margin: 0 }}>
-              Notification and display preferences can live here. API base URL uses <code style={{ fontSize: 12, background: '#f1f5f9', padding: '2px 6px', borderRadius: 4 }}>NEXT_PUBLIC_API_URL</code> when set.
-            </p>
             {user?.role === 'ADMIN' ? (
               <button
                 type="button"
