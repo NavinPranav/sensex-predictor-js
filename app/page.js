@@ -5,6 +5,16 @@ import { useStomp } from './hooks/useStomp';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
+/** Hardcoded market list; only Bank Nifty is active until backend supports more. */
+const MARKET_INSTRUMENTS = [
+  { id: 'BANKNIFTY', name: 'Bank Nifty', symbol: 'BANKNIFTY', exchange: 'NSE', enabled: true },
+  { id: 'NIFTY', name: 'Nifty 50', symbol: 'NIFTY 50', exchange: 'NSE', enabled: false },
+  { id: 'SENSEX', name: 'S&P BSE Sensex', symbol: 'SENSEX', exchange: 'BSE', enabled: false },
+  { id: 'FINNIFTY', name: 'Nifty Fin Service', symbol: 'FINNIFTY', exchange: 'NSE', enabled: false },
+  { id: 'MIDCPNIFTY', name: 'Nifty Midcap Select', symbol: 'MIDCPNIFTY', exchange: 'NSE', enabled: false },
+  { id: 'BANKEX', name: 'S&P BSE Bankex', symbol: 'BANKEX', exchange: 'BSE', enabled: false },
+];
+
 // ── IST helpers ──
 function nowIST() {
   return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
@@ -62,7 +72,7 @@ const api = {
     this.token = data.accessToken;
     if (typeof window !== 'undefined') {
       localStorage.setItem('token', data.accessToken);
-      localStorage.setItem('user', JSON.stringify({ name: data.name, email: data.email }));
+      localStorage.setItem('user', JSON.stringify({ name: data.name, email: data.email, role: data.role || 'USER' }));
     }
     return data;
   },
@@ -76,7 +86,7 @@ const api = {
     this.token = data.accessToken;
     if (typeof window !== 'undefined') {
       localStorage.setItem('token', data.accessToken);
-      localStorage.setItem('user', JSON.stringify({ name: data.name, email: data.email }));
+      localStorage.setItem('user', JSON.stringify({ name: data.name, email: data.email, role: data.role || 'USER' }));
     }
     return data;
   },
@@ -94,6 +104,62 @@ const api = {
     });
     if (res.status === 401) throw new Error('SESSION_EXPIRED');
     if (!res.ok) return [];
+    return res.json();
+  },
+  async getHistory(horizon, page, size) {
+    const params = new URLSearchParams({ page: page ?? 0, size: size ?? 20 });
+    if (horizon) params.set('horizon', horizon);
+    const res = await fetch(`${API}/api/predictions/history?${params}`, {
+      headers: { Authorization: 'Bearer ' + this.token },
+    });
+    if (res.status === 401) throw new Error('SESSION_EXPIRED');
+    if (!res.ok) return { predictions: [], total: 0, totalPages: 0, summary: null };
+    return res.json();
+  },
+  async getActivePrompt() {
+    const res = await fetch(`${API}/api/admin/prompts/active`, {
+      headers: { Authorization: 'Bearer ' + this.token },
+    });
+    if (!res.ok) return null;
+    return res.json();
+  },
+  async getPromptHistory(page, size) {
+    const params = new URLSearchParams({ page: page ?? 0, size: size ?? 10 });
+    const res = await fetch(`${API}/api/admin/prompts?${params}`, {
+      headers: { Authorization: 'Bearer ' + this.token },
+    });
+    if (!res.ok) return { prompts: [], totalElements: 0, totalPages: 0 };
+    return res.json();
+  },
+  async savePrompt(label, promptText) {
+    const res = await fetch(`${API}/api/admin/prompts`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + this.token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label, prompt_text: promptText }),
+    });
+    if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || 'Failed to save prompt'); }
+    return res.json();
+  },
+  async listAdminUsers(page, size) {
+    const params = new URLSearchParams({ page: page ?? 0, size: size ?? 50 });
+    const res = await fetch(`${API}/api/admin/users?${params}`, {
+      headers: { Authorization: 'Bearer ' + this.token },
+    });
+    if (res.status === 401) throw new Error('SESSION_EXPIRED');
+    if (!res.ok) return { users: [] };
+    return res.json();
+  },
+  async updateUserRole(userId, role) {
+    const res = await fetch(`${API}/api/admin/users/${userId}/role`, {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer ' + this.token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role }),
+    });
+    if (res.status === 401) throw new Error('SESSION_EXPIRED');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || 'Failed to update role');
+    }
     return res.json();
   },
   logout() {
@@ -692,8 +758,449 @@ function ProfileMenu({ userName, onLogout }) {
   );
 }
 
+// ── Prediction History Dialog ──
+const OUTCOME_CFG = {
+  TARGET_HIT:    { label: 'Target Hit', bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' },
+  STOP_LOSS_HIT: { label: 'SL Hit',     bg: '#fef2f2', color: '#dc2626', border: '#fecaca' },
+  EXPIRED:       { label: 'Expired',    bg: '#fff7ed', color: '#c2410c', border: '#fed7aa' },
+  PENDING:       { label: 'Pending',    bg: '#f8fafc', color: '#64748b', border: '#e2e8f0' },
+};
+
+function PredictionHistoryDialog({ open, onClose }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [filterHorizon, setFilterHorizon] = useState('');
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 20;
+
+  useEffect(() => {
+    if (!open) return;
+    setLoading(true);
+    api.getHistory(filterHorizon || null, page, PAGE_SIZE)
+      .then(setData)
+      .catch(() => setData(null))
+      .finally(() => setLoading(false));
+  }, [open, filterHorizon, page]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  const applyHorizon = useCallback((h) => { setFilterHorizon(h); setPage(0); }, []);
+
+  if (!open) return null;
+
+  const summary = data?.summary;
+  const predictions = data?.predictions || [];
+  const total = data?.total ?? 0;
+  const totalPages = data?.totalPages ?? 1;
+
+  return (
+    <div className="prediction-history-overlay" onClick={onClose} role="presentation">
+      <div
+        className="prediction-history-dialog"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="hist-dialog-title"
+      >
+      <header className="prediction-history-shell__header">
+        <div className="prediction-history-shell__title-block">
+          <h2 id="hist-dialog-title" className="prediction-history-shell__title">Prediction History</h2>
+          <p className="prediction-history-shell__subtitle">Historical AI signals with market outcomes</p>
+        </div>
+        <button type="button" className="prediction-history-shell__close" onClick={onClose} aria-label="Close">
+          ×
+        </button>
+      </header>
+
+      {summary ? (
+        <div className="prediction-history-shell__summary">
+          {[
+            { label: 'Total',      value: summary.total ?? 0,                                                              color: '#0f172a' },
+            { label: 'Win Rate',   value: (summary.resolved ?? 0) > 0 ? `${summary.winRatePct ?? 0}%` : '—',              color: Number(summary.winRatePct) >= 50 ? '#16a34a' : '#dc2626' },
+            { label: 'Avg Conf',   value: summary.avgConfidence != null ? `${summary.avgConfidence}%` : '—',              color: '#2563eb' },
+            { label: 'Avg R:R',    value: summary.avgRiskReward != null ? Number(summary.avgRiskReward).toFixed(2) : '—', color: '#6b7280' },
+          ].map(({ label, value, color }) => (
+            <div key={label} className="prediction-history-shell__summary-card">
+              <div className="prediction-history-shell__summary-label">{label}</div>
+              <div className="prediction-history-shell__summary-value" style={{ color }}>{value}</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="prediction-history-shell__filters">
+        {[{ k: '', l: 'All' }, { k: '5M', l: '5 Min' }, { k: '15M', l: '15 Min' }, { k: '30M', l: '30 Min' }].map(({ k, l }) => (
+          <button
+            key={k || 'all'}
+            type="button"
+            className={'prediction-history-shell__filter-btn' + (filterHorizon === k ? ' prediction-history-shell__filter-btn--active' : '')}
+            onClick={() => applyHorizon(k)}
+          >
+            {l}
+          </button>
+        ))}
+      </div>
+
+      <div className="prediction-history-shell__table-scroll">
+          {loading ? (
+            <div className="prediction-history-shell__center-msg">Loading predictions…</div>
+          ) : predictions.length === 0 ? (
+            <div className="prediction-history-shell__empty">
+              <span style={{ fontSize: 28 }}>📭</span>
+              <span style={{ fontSize: 13, color: '#94a3b8', textAlign: 'center', padding: '0 16px' }}>No predictions recorded yet. They appear here after WebSocket signals are received.</span>
+            </div>
+          ) : (
+            <table className="prediction-history-shell__table">
+              <thead>
+                <tr className="prediction-history-shell__thead-row">
+                  {['Time (IST)', 'Horizon', 'Signal', 'Conf', 'Entry', 'Stop Loss', 'Target', 'R:R', 'Outcome', 'Actual Close', 'P&L'].map(col => (
+                    <th key={col} className="prediction-history-shell__th">{col}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {predictions.map((p, i) => {
+                  const ts = p.predictionTimestamp ? new Date(p.predictionTimestamp) : null;
+                  const timeStr = ts ? ts.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : '—';
+                  const dir = p.direction || '—';
+                  const isBuy = dir === 'BUY' || dir === 'BULLISH';
+                  const isSell = dir === 'SELL' || dir === 'BEARISH';
+                  const dirColor = isBuy ? '#16a34a' : isSell ? '#dc2626' : '#d97706';
+                  const oc = OUTCOME_CFG[p.outcomeStatus] ?? OUTCOME_CFG.PENDING;
+                  const pnl = p.actualPnlPct != null ? Number(p.actualPnlPct) : null;
+
+                  return (
+                    <tr key={p.id ?? i} style={{ borderBottom: '1px solid #f1f5f9', background: i % 2 === 0 ? '#fff' : '#fafafa' }}>
+                      <td style={{ padding: '8px 10px', color: '#475569', whiteSpace: 'nowrap' }}>{timeStr}</td>
+                      <td style={{ padding: '8px 10px', fontWeight: 600, color: '#0f172a' }}>{p.horizon}</td>
+                      <td style={{ padding: '8px 10px', fontWeight: 700, color: dirColor }}>{dir}</td>
+                      <td style={{ padding: '8px 10px', color: '#475569' }}>{p.confidence != null ? `${Number(p.confidence).toFixed(0)}%` : '—'}</td>
+                      <td style={{ padding: '8px 10px', color: '#2563eb', whiteSpace: 'nowrap' }}>{p.entryPrice != null ? fmtINR(p.entryPrice) : '—'}</td>
+                      <td style={{ padding: '8px 10px', color: '#dc2626', whiteSpace: 'nowrap' }}>{p.stopLoss != null ? fmtINR(p.stopLoss) : '—'}</td>
+                      <td style={{ padding: '8px 10px', color: '#16a34a', whiteSpace: 'nowrap' }}>{p.targetSensex != null ? fmtINR(p.targetSensex) : '—'}</td>
+                      <td style={{ padding: '8px 10px', color: '#475569' }}>{p.riskReward != null ? Number(p.riskReward).toFixed(2) : '—'}</td>
+                      <td style={{ padding: '8px 10px' }}>
+                        <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 10, fontWeight: 700, background: oc.bg, color: oc.color, border: `1px solid ${oc.border}`, whiteSpace: 'nowrap' }}>{oc.label}</span>
+                      </td>
+                      <td style={{ padding: '8px 10px', color: '#475569', whiteSpace: 'nowrap' }}>{p.actualClosePrice != null ? fmtINR(p.actualClosePrice) : '—'}</td>
+                      <td style={{ padding: '8px 10px', fontWeight: 700, whiteSpace: 'nowrap', color: pnl == null ? '#94a3b8' : pnl >= 0 ? '#16a34a' : '#dc2626' }}>
+                        {pnl == null ? '—' : `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+      </div>
+
+      {!loading && total > 0 ? (
+        <footer className="prediction-history-shell__footer">
+          <span className="prediction-history-shell__footer-meta">
+            {total} prediction{total !== 1 ? 's' : ''} · page {page + 1} of {totalPages}
+          </span>
+          <div className="prediction-history-shell__pager">
+            <button
+              type="button"
+              className="prediction-history-shell__page-btn"
+              onClick={() => setPage(p => Math.max(0, p - 1))}
+              disabled={page === 0}
+            >
+              ← Prev
+            </button>
+            <button
+              type="button"
+              className="prediction-history-shell__page-btn"
+              onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+              disabled={page >= totalPages - 1}
+            >
+              Next →
+            </button>
+          </div>
+        </footer>
+      ) : null}
+      </div>
+    </div>
+  );
+}
+
+const USER_ROLES = ['USER', 'PREMIUM', 'ADMIN'];
+
+function AdminUsersSection({ currentEmail, onSelfRoleChanged }) {
+  const [rows, setRows] = useState([]);
+  const [pending, setPending] = useState({}); // id -> selected role before save
+  const [savingId, setSavingId] = useState(null);
+  const [msg, setMsg] = useState(null);
+
+  const load = useCallback(() => {
+    api.listAdminUsers(0, 100).then(d => {
+      setRows(d.users || []);
+    }).catch(() => setRows([]));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function applyRole(u) {
+    const next = pending[u.id] ?? u.role;
+    if (next === u.role) return;
+    setSavingId(u.id);
+    setMsg(null);
+    try {
+      const updated = await api.updateUserRole(u.id, next);
+      setRows(list => list.map(x => (x.id === updated.id ? { ...x, role: updated.role } : x)));
+      setPending(p => { const c = { ...p }; delete c[u.id]; return c; });
+      if (updated.email === currentEmail && onSelfRoleChanged) onSelfRoleChanged(updated.role);
+      setMsg({ type: 'ok', text: `Updated ${updated.email} to ${updated.role}.` });
+    } catch (e) {
+      setMsg({ type: 'err', text: e.message });
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 24, borderTop: '1px solid #e2e8f0', paddingTop: 20 }}>
+      <h3 style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 600, color: '#1e293b' }}>User roles</h3>
+      <p style={{ margin: '0 0 12px', fontSize: 12, color: '#64748b', lineHeight: 1.5 }}>
+        Grant <strong>ADMIN</strong> to another account after they have registered. You cannot remove the last admin.
+        If you change your own role away from admin, refresh the page — admin-only sections will disappear.
+      </p>
+      {msg && (
+        <p style={{ fontSize: 12, margin: '0 0 10px', color: msg.type === 'ok' ? '#16a34a' : '#dc2626' }}>{msg.text}</p>
+      )}
+      <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 8, background: '#fff' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead>
+            <tr style={{ background: '#f8fafc', textAlign: 'left' }}>
+              <th style={{ padding: '10px 12px', fontWeight: 600, color: '#475569' }}>Name</th>
+              <th style={{ padding: '10px 12px', fontWeight: 600, color: '#475569' }}>Email</th>
+              <th style={{ padding: '10px 12px', fontWeight: 600, color: '#475569' }}>Role</th>
+              <th style={{ padding: '10px 12px', width: 100 }} />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(u => {
+              const sel = pending[u.id] ?? u.role;
+              const dirty = sel !== u.role;
+              return (
+                <tr key={u.id} style={{ borderTop: '1px solid #f1f5f9' }}>
+                  <td style={{ padding: '10px 12px', color: '#0f172a' }}>{u.name}</td>
+                  <td style={{ padding: '10px 12px', color: '#64748b' }}>{u.email}</td>
+                  <td style={{ padding: '8px 12px' }}>
+                    <select
+                      value={sel}
+                      onChange={e => setPending(p => ({ ...p, [u.id]: e.target.value }))}
+                      style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 13 }}
+                    >
+                      {USER_ROLES.map(r => (
+                        <option key={r} value={r}>{r}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td style={{ padding: '8px 12px' }}>
+                    <button
+                      type="button"
+                      disabled={!dirty || savingId === u.id}
+                      onClick={() => applyRole(u)}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: 6,
+                        border: 'none',
+                        cursor: dirty && savingId !== u.id ? 'pointer' : 'not-allowed',
+                        background: dirty && savingId !== u.id ? '#0f766e' : '#cbd5e1',
+                        color: '#fff',
+                        fontSize: 12,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {savingId === u.id ? '…' : 'Apply'}
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {rows.length === 0 && (
+          <p style={{ padding: 16, margin: 0, fontSize: 13, color: '#94a3b8' }}>No users loaded.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Admin Prompt Management Section ──
+const DEFAULT_PROMPT_HINT = `You are an expert intra-day Bank Nifty trader and options analyst.
+Predict what Bank Nifty will do in the NEXT {target_minutes} MINUTES.
+
+Respond with ONE JSON object only (no markdown fences), with EXACTLY these keys:
+  direction, entry_price, stop_loss, target_price, risk_reward,
+  confidence, magnitude, predicted_volatility, valid_minutes, reason
+
+STRICT RULES:
+  1. If confidence < 65 → direction = HOLD
+  2. Risk-reward must be >= 1.5 for BUY or SELL; if not achievable, use HOLD.
+  3. stop_loss is mandatory and must never equal entry_price or target_price.
+  4. Output ONLY valid JSON — no extra text, no markdown.`;
+
+function AdminPromptSection() {
+  const [promptText, setPromptText] = useState('');
+  const [label, setLabel] = useState('');
+  const [activePrompt, setActivePrompt] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState(null); // { type: 'ok'|'error', msg }
+  const [showHistory, setShowHistory] = useState(false);
+
+  useEffect(() => {
+    api.getActivePrompt().then(p => {
+      if (p && p.promptText) {
+        setActivePrompt(p);
+        setPromptText(p.promptText);
+        setLabel(p.label || '');
+      }
+    }).catch(() => {});
+  }, []);
+
+  async function loadHistory() {
+    const data = await api.getPromptHistory(0, 10).catch(() => null);
+    if (data) setHistory(data.prompts || []);
+    setShowHistory(true);
+  }
+
+  async function handleSave() {
+    if (!label.trim()) { setStatus({ type: 'error', msg: 'Label is required.' }); return; }
+    if (!promptText.includes('{target_minutes}')) {
+      setStatus({ type: 'error', msg: 'Prompt must contain {target_minutes}.' });
+      return;
+    }
+    setSaving(true);
+    setStatus(null);
+    try {
+      const saved = await api.savePrompt(label.trim(), promptText.trim());
+      setActivePrompt(saved);
+      setStatus({ type: 'ok', msg: 'Prompt saved and activated.' });
+    } catch (e) {
+      setStatus({ type: 'error', msg: e.message });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const hasMissingVar = promptText && !promptText.includes('{target_minutes}');
+
+  return (
+    <div style={{ marginTop: 24, borderTop: '1px solid #e2e8f0', paddingTop: 20 }}>
+      <h3 style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 600, color: '#1e293b' }}>AI Prompt Management</h3>
+      <p style={{ margin: '0 0 12px', fontSize: 12, color: '#64748b', lineHeight: 1.5 }}>
+        Customise the system prompt sent to Gemini for every prediction. The following dynamic variables are
+        substituted at runtime — you <strong>must</strong> include them:
+      </p>
+      <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: 12, lineHeight: 1.7 }}>
+        <code style={{ display: 'block', color: '#0f172a' }}>
+          <strong>{'{target_minutes}'}</strong> — number of minutes ahead for this horizon (e.g. 5 for 5M, 15 for 15M, 30 for 30M)
+        </code>
+      </div>
+      <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
+        Label <span style={{ fontWeight: 400, color: '#94a3b8' }}>(short name for this version)</span>
+      </label>
+      <input
+        type="text"
+        value={label}
+        onChange={e => setLabel(e.target.value)}
+        placeholder="e.g. v2 — tighter stop rules"
+        style={{ width: '100%', padding: '7px 10px', borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 13, marginBottom: 12, boxSizing: 'border-box' }}
+      />
+      <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
+        Prompt template
+      </label>
+      <textarea
+        value={promptText}
+        onChange={e => setPromptText(e.target.value)}
+        placeholder={DEFAULT_PROMPT_HINT}
+        rows={12}
+        style={{
+          width: '100%', padding: '8px 10px', borderRadius: 6, fontSize: 12, lineHeight: 1.6, fontFamily: 'monospace',
+          border: hasMissingVar ? '1.5px solid #ef4444' : '1px solid #cbd5e1',
+          resize: 'vertical', boxSizing: 'border-box', background: '#fff',
+        }}
+      />
+      {hasMissingVar && (
+        <p style={{ fontSize: 11, color: '#ef4444', margin: '4px 0 0' }}>
+          Missing required variable: <code>{'{target_minutes}'}</code>
+        </p>
+      )}
+      {status && (
+        <p style={{ fontSize: 12, margin: '8px 0 0', color: status.type === 'ok' ? '#16a34a' : '#dc2626', fontWeight: 500 }}>
+          {status.type === 'ok' ? '✓ ' : '✗ '}{status.msg}
+        </p>
+      )}
+      <div style={{ display: 'flex', gap: 10, marginTop: 12, alignItems: 'center' }}>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving || hasMissingVar || !promptText.trim()}
+          style={{
+            padding: '8px 18px', borderRadius: 6, border: 'none', cursor: saving ? 'not-allowed' : 'pointer',
+            background: saving ? '#94a3b8' : '#4f46e5', color: '#fff', fontWeight: 600, fontSize: 13,
+          }}
+        >
+          {saving ? 'Saving…' : 'Save & Activate'}
+        </button>
+        <button
+          type="button"
+          onClick={showHistory ? () => setShowHistory(false) : loadHistory}
+          style={{ padding: '8px 14px', borderRadius: 6, border: '1px solid #e2e8f0', background: '#fff', cursor: 'pointer', fontSize: 12, color: '#475569' }}
+        >
+          {showHistory ? 'Hide history' : 'View history'}
+        </button>
+      </div>
+      {showHistory && history.length > 0 && (
+        <div style={{ marginTop: 14, borderTop: '1px solid #f1f5f9', paddingTop: 10 }}>
+          <p style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', margin: '0 0 8px', letterSpacing: '0.05em' }}>Recent prompts</p>
+          {history.map(h => (
+            <div key={h.id} style={{ marginBottom: 10, padding: '8px 12px', border: '1px solid #e2e8f0', borderRadius: 6, background: h.isActive ? '#f0fdf4' : '#fafafa' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: '#1e293b' }}>{h.label}</span>
+                {h.isActive && <span style={{ fontSize: 10, fontWeight: 700, color: '#16a34a', background: '#dcfce7', padding: '2px 8px', borderRadius: 10 }}>ACTIVE</span>}
+              </div>
+              <p style={{ fontSize: 10, color: '#94a3b8', margin: '0 0 6px' }}>
+                {h.createdBy} · {h.createdAt ? new Date(h.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : ''}
+              </p>
+              <button
+                type="button"
+                onClick={() => { setPromptText(h.promptText); setLabel(h.label + ' (copy)'); setShowHistory(false); }}
+                style={{ fontSize: 11, color: '#4f46e5', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
+              >
+                Load into editor
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {showHistory && history.length === 0 && (
+        <p style={{ fontSize: 12, color: '#94a3b8', marginTop: 10 }}>No prompt history yet.</p>
+      )}
+    </div>
+  );
+}
+
 // ── Dashboard ──
-function Dashboard({ user, accessToken, onLogout }) {
+function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
   const [restPrediction, setRestPrediction] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -703,6 +1210,13 @@ function Dashboard({ user, accessToken, onLogout }) {
   const [chartCandles, setChartCandles] = useState([]);
   const [liveCandle, setLiveCandle] = useState(null);
   const liveTickRef = useRef(null);
+  const [instrumentsOpen, setInstrumentsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [activeInstrumentId, setActiveInstrumentId] = useState('BANKNIFTY');
+  const instrumentsRef = useRef(null);
+  const sidebarRef = useRef(null);
 
   const { connected, livePrediction, livePrice, connectionError, setHorizon: wsSetHorizon } = useStomp(accessToken);
 
@@ -794,6 +1308,31 @@ function Dashboard({ user, accessToken, onLogout }) {
     return () => clearInterval(id);
   }, [fetchPrediction, connected]);
 
+  useEffect(() => {
+    if (!instrumentsOpen) return;
+    const onDoc = (e) => {
+      if (instrumentsRef.current && !instrumentsRef.current.contains(e.target)) setInstrumentsOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [instrumentsOpen]);
+
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const onKey = (e) => {
+      if (e.key === 'Escape') setSidebarOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [sidebarOpen]);
+
+  useEffect(() => {
+    const el = sidebarRef.current;
+    if (!el) return;
+    if (sidebarOpen) el.removeAttribute('inert');
+    else el.setAttribute('inert', '');
+  }, [sidebarOpen]);
+
   const dir = prediction?.direction || 'HOLD';
   const isBull = dir === 'BUY' || dir === 'BULLISH';
   const isBear = dir === 'SELL' || dir === 'BEARISH';
@@ -837,11 +1376,141 @@ function Dashboard({ user, accessToken, onLogout }) {
 
   return (
     <div className="dashboard-root" style={styles.page}>
+      <div className="dashboard-shell">
+        <aside
+          ref={sidebarRef}
+          id="dashboard-sidebar"
+          className={'dashboard-sidebar' + (sidebarOpen ? ' dashboard-sidebar--open' : '')}
+          aria-label="Instruments, prediction history, and settings"
+          aria-hidden={!sidebarOpen}
+        >
+          <div className="dashboard-sidebar__instruments-block" ref={instrumentsRef}>
+            <button
+              type="button"
+              className={'dashboard-sidebar__btn' + (instrumentsOpen ? ' dashboard-sidebar__btn--active' : '')}
+              onClick={() => setInstrumentsOpen((o) => !o)}
+              aria-expanded={instrumentsOpen}
+              aria-controls="instruments-panel"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" />
+                <line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" />
+                <line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" />
+                <line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" />
+                <line x1="17" y1="16" x2="23" y2="16" />
+              </svg>
+              Instruments
+            </button>
+            {instrumentsOpen ? (
+              <div id="instruments-panel" className="dashboard-sidebar-popover dashboard-sidebar-popover--instruments" role="region" aria-label="Market instruments">
+                <div className="dashboard-instrument-list__heading">Market instruments</div>
+                <ul className="dashboard-instrument-list">
+                  {MARKET_INSTRUMENTS.map((inst) => {
+                    const isActive = activeInstrumentId === inst.id;
+                    if (!inst.enabled) {
+                      return (
+                        <li key={inst.id}>
+                          <button
+                            type="button"
+                            className="dashboard-instrument-list__item dashboard-instrument-list__item--disabled"
+                            disabled
+                            title="Coming soon"
+                          >
+                            <span className="dashboard-instrument-list__text">
+                              <span className="dashboard-instrument-list__name">{inst.name}</span>
+                              <span className="dashboard-instrument-list__meta">
+                                {inst.symbol} · {inst.exchange}
+                              </span>
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    }
+                    return (
+                      <li key={inst.id}>
+                        <button
+                          type="button"
+                          className={
+                            'dashboard-instrument-list__item' +
+                            (isActive ? ' dashboard-instrument-list__item--active' : '')
+                          }
+                          onClick={() => setActiveInstrumentId(inst.id)}
+                          aria-pressed={isActive}
+                        >
+                          <span className="dashboard-instrument-list__text">
+                            <span className="dashboard-instrument-list__name">{inst.name}</span>
+                            <span className="dashboard-instrument-list__meta">
+                              {inst.symbol} · {inst.exchange}
+                            </span>
+                          </span>
+                          {isActive ? (
+                            <span className="dashboard-instrument-list__check" aria-hidden>
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="20 6 9 17 4 12" />
+                              </svg>
+                            </span>
+                          ) : null}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+
+          <button
+            type="button"
+            className="dashboard-sidebar__btn"
+            onClick={() => setHistoryOpen(true)}
+            aria-haspopup="dialog"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+            Prediction history
+          </button>
+
+          <button type="button" className="dashboard-sidebar__btn" onClick={() => setSettingsOpen(true)} aria-haspopup="dialog">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <circle cx="12" cy="12" r="3" />
+              <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+            </svg>
+            Settings
+          </button>
+        </aside>
+
+        {sidebarOpen ? (
+          <div
+            className="dashboard-sidebar-backdrop"
+            onClick={() => setSidebarOpen(false)}
+            onKeyDown={(e) => e.key === 'Escape' && setSidebarOpen(false)}
+            role="presentation"
+            aria-hidden="true"
+          />
+        ) : null}
+
+        <div className="dashboard-main">
       {/* Sticky header */}
       <header className="dashboard-sticky-header">
         <div className="top-bar-row top-bar-row--compact-nav">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>Bank Nifty</span>
+            <button
+              type="button"
+              className="dashboard-sidebar-toggle"
+              onClick={() => setSidebarOpen((o) => !o)}
+              aria-expanded={sidebarOpen}
+              aria-controls="dashboard-sidebar"
+              title={sidebarOpen ? 'Close menu' : 'Open menu'}
+            >
+              <span className="dashboard-sidebar-toggle__lines" aria-hidden>
+                <span className="dashboard-sidebar-toggle__line" />
+                <span className="dashboard-sidebar-toggle__line" />
+                <span className="dashboard-sidebar-toggle__line" />
+              </span>
+              <span className="sr-only">{sidebarOpen ? 'Close sidebar' : 'Open sidebar'}</span>
+            </button>
             <SessionBadge session={session} minutesToCloseVal={minsToClose} />
           </div>
           <ProfileMenu userName={user.name} onLogout={onLogout} />
@@ -965,6 +1634,44 @@ function Dashboard({ user, accessToken, onLogout }) {
           {connected ? ' · WebSocket connected' : ' · WebSocket disconnected'}
         </footer>
       </div>
+        </div>
+      </div>
+
+      <PredictionHistoryDialog open={historyOpen} onClose={() => setHistoryOpen(false)} />
+
+      {settingsOpen ? (
+        <div
+          className="dashboard-settings-backdrop"
+          onClick={() => setSettingsOpen(false)}
+          onKeyDown={(e) => e.key === 'Escape' && setSettingsOpen(false)}
+          role="presentation"
+        >
+          <div
+            className="dashboard-settings-panel"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-dialog-title"
+          >
+            <button type="button" className="dashboard-settings-panel__close" onClick={() => setSettingsOpen(false)} aria-label="Close settings">
+              ×
+            </button>
+            <h2 id="settings-dialog-title">Settings</h2>
+            <p style={{ fontSize: 14, color: '#64748b', lineHeight: 1.5, margin: 0 }}>
+              Notification and display preferences can live here. API base URL uses <code style={{ fontSize: 12, background: '#f1f5f9', padding: '2px 6px', borderRadius: 4 }}>NEXT_PUBLIC_API_URL</code> when set.
+            </p>
+            {user?.role === 'ADMIN' && (
+              <>
+                <AdminUsersSection
+                  currentEmail={user?.email}
+                  onSelfRoleChanged={role => onUserUpdate?.({ role })}
+                />
+                <AdminPromptSection />
+              </>
+            )}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -983,8 +1690,16 @@ export default function Home() {
 
   const logout = () => { api.logout(); setUser(null); setAccessToken(null); };
   const onLogin = (u) => { setUser(u); setAccessToken(api.token); };
+  const onUserUpdate = (patch) => {
+    setUser(prev => {
+      if (!prev) return prev;
+      const next = { ...prev, ...patch };
+      if (typeof window !== 'undefined') localStorage.setItem('user', JSON.stringify(next));
+      return next;
+    });
+  };
 
   if (!ready) return null;
   if (!user) return <Login onLogin={onLogin} />;
-  return <Dashboard user={user} accessToken={accessToken} onLogout={logout} />;
+  return <Dashboard user={user} accessToken={accessToken} onLogout={logout} onUserUpdate={onUserUpdate} />;
 }
