@@ -132,8 +132,10 @@ const api = {
     if (!res.ok) return null;
     return res.json();
   },
-  async getPromptHistory(page, size) {
+  async getPromptHistory(page, size, label) {
     const params = new URLSearchParams({ page: page ?? 0, size: size ?? 10 });
+    const q = label != null && String(label).trim() !== '' ? String(label).trim() : '';
+    if (q) params.set('label', q);
     const res = await fetch(`${API}/api/admin/prompts?${params}`, {
       headers: { Authorization: 'Bearer ' + this.token },
     });
@@ -377,21 +379,73 @@ function chartTimeToUnixSeconds(t) {
   return null;
 }
 
-// ── Candlestick chart ──
+// ── Candlestick chart (lightweight-charts) ──
 function CandlestickChart({ candles, liveCandle, signal }) {
+  const fullscreenRootRef = useRef(null);
   const containerRef = useRef(null);
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
+  const candlesRef = useRef(candles);
+  const liveCandleRef = useRef(liveCandle);
+  const signalRef = useRef(signal);
+  const [isChartFullscreen, setIsChartFullscreen] = useState(false);
+  candlesRef.current = candles;
+  liveCandleRef.current = liveCandle;
+  signalRef.current = signal;
+
+  const toggleChartFullscreen = useCallback(async () => {
+    const el = fullscreenRootRef.current;
+    if (!el || typeof document === 'undefined') return;
+    try {
+      const doc = document;
+      const inFs = doc.fullscreenElement === el || doc.webkitFullscreenElement === el;
+      if (inFs) {
+        if (doc.exitFullscreen) await doc.exitFullscreen();
+        else if (doc.webkitExitFullscreen) await doc.webkitExitFullscreen();
+      } else if (el.requestFullscreen) {
+        await el.requestFullscreen();
+      } else if (el.webkitRequestFullscreen) {
+        await el.webkitRequestFullscreen();
+      }
+    } catch {
+      /* unsupported or blocked */
+    }
+  }, []);
+
+  useEffect(() => {
+    const syncFs = () => {
+      const root = fullscreenRootRef.current;
+      const active =
+        root &&
+        (document.fullscreenElement === root || document.webkitFullscreenElement === root);
+      setIsChartFullscreen(!!active);
+      requestAnimationFrame(() => {
+        if (containerRef.current && chartRef.current) {
+          const w = containerRef.current.clientWidth;
+          const h = Math.max(containerRef.current.clientHeight, 1);
+          chartRef.current.applyOptions({ width: w, height: h });
+        }
+      });
+    };
+    document.addEventListener('fullscreenchange', syncFs);
+    document.addEventListener('webkitfullscreenchange', syncFs);
+    return () => {
+      document.removeEventListener('fullscreenchange', syncFs);
+      document.removeEventListener('webkitfullscreenchange', syncFs);
+    };
+  }, []);
 
   useEffect(() => {
     if (!containerRef.current) return;
-    let chart, series;
+    let ro;
+    let disposed = false;
 
     import('lightweight-charts').then(({ createChart, CrosshairMode }) => {
-      if (!containerRef.current) return;
-      chart = createChart(containerRef.current, {
+      if (!containerRef.current || disposed) return;
+      const initialH = Math.max(containerRef.current.clientHeight, 1);
+      const chart = createChart(containerRef.current, {
         width: containerRef.current.clientWidth,
-        height: 220,
+        height: initialH || 220,
         layout: { background: { type: 'solid', color: '#0f172a' }, textColor: '#94a3b8' },
         grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
         crosshair: { mode: CrosshairMode.Normal },
@@ -401,7 +455,7 @@ function CandlestickChart({ candles, liveCandle, signal }) {
         handleScale: true,
       });
 
-      series = chart.addCandlestickSeries({
+      const series = chart.addCandlestickSeries({
         upColor: '#22c55e', downColor: '#ef4444',
         borderVisible: false,
         wickUpColor: '#22c55e', wickDownColor: '#ef4444',
@@ -410,15 +464,53 @@ function CandlestickChart({ candles, liveCandle, signal }) {
       chartRef.current = chart;
       seriesRef.current = series;
 
-      const ro = new ResizeObserver(() => {
+      ro = new ResizeObserver(() => {
         if (containerRef.current && chartRef.current) {
-          chartRef.current.applyOptions({ width: containerRef.current.clientWidth });
+          const w = containerRef.current.clientWidth;
+          const h = Math.max(containerRef.current.clientHeight, 1);
+          chartRef.current.applyOptions({ width: w, height: h });
         }
       });
       ro.observe(containerRef.current);
+
+      // OHLCV often resolves before this dynamic import finishes; apply latest props immediately.
+      const data = Array.isArray(candlesRef.current) ? candlesRef.current : [];
+      series.setData(data);
+      if (data.length) chart.timeScale().fitContent();
+
+      const lc = liveCandleRef.current;
+      if (lc) {
+        const liveTs = chartTimeToUnixSeconds(lc.time);
+        if (liveTs != null) {
+          const lastTs = data.length ? chartTimeToUnixSeconds(data[data.length - 1].time) : null;
+          if (lastTs == null || liveTs >= lastTs) {
+            try {
+              series.update(lc);
+            } catch {
+              /* ignore race with setData */
+            }
+          }
+        }
+      }
+
+      const sig = signalRef.current;
+      const lastTime = data.length ? data[data.length - 1]?.time : null;
+      const isBuy = sig === 'BUY';
+      const isSell = sig === 'SELL';
+      if (lastTime && (isBuy || isSell)) {
+        series.setMarkers([{
+          time: lastTime,
+          position: isBuy ? 'belowBar' : 'aboveBar',
+          color: isBuy ? '#22c55e' : '#ef4444',
+          shape: isBuy ? 'arrowUp' : 'arrowDown',
+          text: isBuy ? 'BUY' : 'SELL',
+        }]);
+      }
     });
 
     return () => {
+      disposed = true;
+      ro?.disconnect();
       chartRef.current?.remove();
       chartRef.current = null;
       seriesRef.current = null;
@@ -467,12 +559,53 @@ function CandlestickChart({ candles, liveCandle, signal }) {
   }, [signal, candles]);
 
   return (
-    <div style={{ ...styles.card, overflow: 'hidden', marginBottom: 0 }}>
-      <div style={{ padding: '10px 16px', background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', letterSpacing: 0.5, textTransform: 'uppercase' }}>Bank Nifty · 5 min candles</span>
-        <span style={{ fontSize: 10, color: '#475569' }}>live ticks streamed</span>
+    <div
+      ref={fullscreenRootRef}
+      className="candlestick-chart-shell"
+      style={{ ...styles.card, overflow: 'hidden', marginBottom: 0 }}
+    >
+      <div
+        style={{
+          padding: '10px 16px',
+          background: '#0f172a',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 10,
+          flexShrink: 0,
+        }}
+      >
+        <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', letterSpacing: 0.5, textTransform: 'uppercase' }}>
+          Bank Nifty · 5 min candles
+        </span>
+        <span style={{ fontSize: 10, color: '#475569', whiteSpace: 'nowrap' }}>live ticks streamed</span>
       </div>
-      <div ref={containerRef} style={{ width: '100%', height: 220, background: '#0f172a' }} />
+      <div className="candlestick-chart__plot-wrap">
+        <div ref={containerRef} className="candlestick-chart__plot" style={{ width: '100%', height: 220, background: '#0f172a' }} />
+        <button
+          type="button"
+          onClick={toggleChartFullscreen}
+          aria-label={isChartFullscreen ? 'Exit fullscreen chart' : 'Fullscreen chart'}
+          title={isChartFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+          className="candlestick-chart-shell__fs-btn candlestick-chart-shell__fs-btn--corner"
+        >
+          {isChartFullscreen ? (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <polyline points="4 14 10 14 10 20" />
+              <polyline points="20 10 14 10 14 4" />
+              <line x1="14" y1="10" x2="21" y2="3" />
+              <line x1="3" y1="21" x2="10" y2="14" />
+            </svg>
+          ) : (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <polyline points="15 3 21 3 21 9" />
+              <polyline points="9 21 3 21 3 15" />
+              <line x1="21" y1="3" x2="14" y2="10" />
+              <line x1="3" y1="21" x2="10" y2="14" />
+            </svg>
+          )}
+        </button>
+      </div>
     </div>
   );
 }
@@ -492,9 +625,9 @@ function SessionChartCarousel({ livePrice, candles, liveCandle, signal }) {
     if (w < 1) return;
     const idx = Math.min(1, Math.max(0, Math.round(vp.scrollLeft / w)));
     setSlideIdx(idx);
+    // Height follows the visible slide only so a compact session strip shrinks the carousel (and page) instead of reserving chart height.
     const inner = idx === 0 ? slide0Ref.current : slide1Ref.current;
-    if (!inner) return;
-    const h = inner.offsetHeight;
+    const h = inner?.offsetHeight ?? 0;
     if (h > 0) setVpHeight(h);
   }, []);
 
@@ -506,7 +639,11 @@ function SessionChartCarousel({ livePrice, candles, liveCandle, signal }) {
     const vp = vpRef.current;
     if (!vp) return;
     vp.addEventListener('scroll', measureActiveSlide, { passive: true });
-    return () => vp.removeEventListener('scroll', measureActiveSlide);
+    vp.addEventListener('scrollend', measureActiveSlide);
+    return () => {
+      vp.removeEventListener('scroll', measureActiveSlide);
+      vp.removeEventListener('scrollend', measureActiveSlide);
+    };
   }, [measureActiveSlide]);
 
   useEffect(() => {
@@ -1154,17 +1291,21 @@ function formatPromptHistoryTimestamp(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString('en-IN', {
-    timeZone: 'Asia/Kolkata',
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
+  const tz = 'Asia/Kolkata';
+  const datePart = new Intl.DateTimeFormat('en-GB', {
+    timeZone: tz,
+    day: '2-digit',
+    month: '2-digit',
     year: 'numeric',
+  }).format(d);
+  const timePart = new Intl.DateTimeFormat('en-IN', {
+    timeZone: tz,
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
     hour12: true,
-  });
+  }).format(d);
+  return `${datePart}, ${timePart}`;
 }
 
 /** Nested modal: read-only full prompt for one history row */
@@ -1174,6 +1315,7 @@ function PromptTextDetailDialog({ row, onClose, onUseInEditor }) {
   const editor = row.createdBy ?? row.created_by ?? '—';
   const label = row.label ?? '—';
   const when = formatPromptHistoryTimestamp(row.createdAt ?? row.created_at);
+  const isActivePrompt = row.isActive ?? row.is_active;
 
   return (
     <div className="prompt-detail-overlay" onClick={onClose} role="presentation">
@@ -1186,8 +1328,21 @@ function PromptTextDetailDialog({ row, onClose, onUseInEditor }) {
       >
         <div className="prompt-detail-dialog__header">
           <div>
-            <h3 id="prompt-detail-title" className="prompt-detail-dialog__title">
-              {label}
+            <h3 id="prompt-detail-title" className="prompt-detail-dialog__title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {isActivePrompt ? (
+                <span
+                  title="Active prompt"
+                  aria-label="Active prompt"
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    background: '#16a34a',
+                    flexShrink: 0,
+                  }}
+                />
+              ) : null}
+              <span>{label}</span>
             </h3>
             <p className="prompt-detail-dialog__meta">
               Editor: <strong style={{ color: '#334155' }}>{editor}</strong>
@@ -1243,22 +1398,40 @@ function PromptHistoryDialog({ open, onClose, onUseInEditor }) {
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
   const [detailRow, setDetailRow] = useState(null);
+  const [searchInput, setSearchInput] = useState('');
+  const [debouncedLabel, setDebouncedLabel] = useState('');
+  const committedLabelRef = useRef('');
 
   useEffect(() => {
     if (!open) return;
     setPage(0);
     setDetailRow(null);
+    setSearchInput('');
+    setDebouncedLabel('');
+    committedLabelRef.current = '';
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const t = setTimeout(() => {
+      const trimmed = searchInput.trim();
+      if (committedLabelRef.current === trimmed) return;
+      committedLabelRef.current = trimmed;
+      setDebouncedLabel(trimmed);
+      setPage(0);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [searchInput, open]);
 
   useEffect(() => {
     if (!open) return;
     setLoading(true);
     api
-      .getPromptHistory(page, PROMPT_HISTORY_PAGE_SIZE)
+      .getPromptHistory(page, PROMPT_HISTORY_PAGE_SIZE, debouncedLabel)
       .then(setData)
       .catch(() => setData({ prompts: [], totalElements: 0, totalPages: 0 }))
       .finally(() => setLoading(false));
-  }, [open, page]);
+  }, [open, page, debouncedLabel]);
 
   useEffect(() => {
     if (!open) return;
@@ -1317,14 +1490,41 @@ function PromptHistoryDialog({ open, onClose, onUseInEditor }) {
             </button>
           </header>
 
-          <div className="prediction-history-shell__table-scroll">
+          <div className="prompt-history-toolbar" aria-label="Filter prompt history">
+            <label className="prompt-history-search">
+              <span className="prompt-history-search__icon" aria-hidden>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path
+                    d="M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  />
+                  <path d="M16 16 21 21" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              </span>
+              <input
+                type="search"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                placeholder="Search label…"
+                className="prompt-history-search__input"
+                autoComplete="off"
+                aria-label="Search prompts by label"
+              />
+            </label>
+          </div>
+
+          <div className="prediction-history-shell__table-scroll prediction-history-shell__table-scroll--below-search">
             {loading ? (
               <div className="prediction-history-shell__center-msg">Loading prompt history…</div>
             ) : prompts.length === 0 ? (
               <div className="prediction-history-shell__empty">
                 <span style={{ fontSize: 28 }}>📭</span>
                 <span style={{ fontSize: 13, color: '#94a3b8', textAlign: 'center', padding: '0 16px' }}>
-                  No prompt versions saved yet.
+                  {debouncedLabel
+                    ? 'No prompts match this label.'
+                    : 'No prompt versions saved yet.'}
                 </span>
               </div>
             ) : (
@@ -1354,29 +1554,28 @@ function PromptHistoryDialog({ open, onClose, onUseInEditor }) {
                       >
                         <td style={{ padding: '10px 12px', color: '#334155' }}>{editor}</td>
                         <td style={{ padding: '10px 12px' }}>
-                          <button
-                            type="button"
-                            className="prompt-history-label-btn"
-                            onClick={() => setDetailRow(h)}
-                          >
-                            {lab}
-                          </button>
-                          {active ? (
-                            <span
-                              style={{
-                                marginLeft: 8,
-                                fontSize: 10,
-                                fontWeight: 700,
-                                color: '#16a34a',
-                                background: '#dcfce7',
-                                padding: '2px 8px',
-                                borderRadius: 10,
-                                verticalAlign: 'middle',
-                              }}
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                            {active ? (
+                              <span
+                                title="Active prompt"
+                                aria-label="Active prompt"
+                                style={{
+                                  width: 8,
+                                  height: 8,
+                                  borderRadius: '50%',
+                                  background: '#16a34a',
+                                  flexShrink: 0,
+                                }}
+                              />
+                            ) : null}
+                            <button
+                              type="button"
+                              className="prompt-history-label-btn"
+                              onClick={() => setDetailRow(h)}
                             >
-                              ACTIVE
-                            </span>
-                          ) : null}
+                              {lab}
+                            </button>
+                          </span>
                         </td>
                         <td style={{ padding: '10px 12px', color: '#475569', whiteSpace: 'nowrap' }}>{when}</td>
                       </tr>
