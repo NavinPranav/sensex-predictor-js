@@ -775,6 +775,29 @@ const OUTCOME_CFG = {
   PENDING:       { label: 'Pending',    bg: '#f8fafc', color: '#64748b', border: '#e2e8f0' },
 };
 
+/** Inline hourglass for pending outcome — matches pill height (~24px row padding). */
+function OutcomePendingIcon({ color }) {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden
+      style={{ display: 'block', flexShrink: 0, color }}
+    >
+      <path
+        d="M5 22h14M5 2h14M17 22v-4.17a2 2 0 0 0-.59-1.41L12 12l-4.41 4.42A2 2 0 0 0 7 17.83V22M7 2v4.17a2 2 0 0 0 .59 1.41L12 12l4.41-4.42A2 2 0 0 0 17 6.17V2"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function PredictionHistoryDialog({ open, onClose }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -891,6 +914,7 @@ function PredictionHistoryDialog({ open, onClose }) {
                   const dirColor = isBuy ? '#16a34a' : isSell ? '#dc2626' : '#d97706';
                   const oc = OUTCOME_CFG[p.outcomeStatus] ?? OUTCOME_CFG.PENDING;
                   const pnl = p.actualPnlPct != null ? Number(p.actualPnlPct) : null;
+                  const showPendingIcon = !p.outcomeStatus || p.outcomeStatus === 'PENDING';
 
                   return (
                     <tr key={p.id ?? i} style={{ borderBottom: '1px solid #f1f5f9', background: i % 2 === 0 ? '#fff' : '#fafafa' }}>
@@ -902,8 +926,27 @@ function PredictionHistoryDialog({ open, onClose }) {
                       <td style={{ padding: '8px 10px', color: '#dc2626', whiteSpace: 'nowrap' }}>{p.stopLoss != null ? fmtINR(p.stopLoss) : '—'}</td>
                       <td style={{ padding: '8px 10px', color: '#16a34a', whiteSpace: 'nowrap' }}>{p.targetSensex != null ? fmtINR(p.targetSensex) : '—'}</td>
                       <td style={{ padding: '8px 10px', color: '#475569' }}>{p.riskReward != null ? Number(p.riskReward).toFixed(2) : '—'}</td>
-                      <td style={{ padding: '8px 10px' }}>
-                        <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 10, fontWeight: 700, background: oc.bg, color: oc.color, border: `1px solid ${oc.border}`, whiteSpace: 'nowrap' }}>{oc.label}</span>
+                      <td style={{ padding: '8px 10px', textAlign: 'center', verticalAlign: 'middle' }}>
+                        <span
+                          title="Pending"
+                          aria-label="Pending"
+                          style={{
+                            padding: showPendingIcon ? '4px 10px' : '2px 8px',
+                            borderRadius: 12,
+                            fontSize: 10,
+                            fontWeight: 700,
+                            background: oc.bg,
+                            color: oc.color,
+                            border: `1px solid ${oc.border}`,
+                            whiteSpace: 'nowrap',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            lineHeight: 1,
+                          }}
+                        >
+                          {showPendingIcon ? <OutcomePendingIcon color={oc.color} /> : oc.label}
+                        </span>
                       </td>
                       <td style={{ padding: '8px 10px', color: '#475569', whiteSpace: 'nowrap' }}>{p.actualClosePrice != null ? fmtINR(p.actualClosePrice) : '—'}</td>
                       <td style={{ padding: '8px 10px', fontWeight: 700, whiteSpace: 'nowrap', color: pnl == null ? '#94a3b8' : pnl >= 0 ? '#16a34a' : '#dc2626' }}>
