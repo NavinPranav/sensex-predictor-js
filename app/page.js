@@ -115,9 +115,14 @@ const api = {
     if (!res.ok) return [];
     return res.json();
   },
-  async getHistory(horizon, page, size) {
-    const params = new URLSearchParams({ page: page ?? 0, size: size ?? 20 });
-    if (horizon) params.set('horizon', horizon);
+  async getHistory(page, size, scope = 'all', filters = {}) {
+    const horizons = filters.horizons ?? [];
+    const signals = filters.signals ?? [];
+    const sortTime = filters.sortTime === 'asc' ? 'asc' : 'desc';
+    const params = new URLSearchParams({ page: page ?? 0, size: size ?? 20, sortTime });
+    if (scope && scope !== 'all') params.set('scope', scope);
+    horizons.forEach((h) => params.append('horizons', h));
+    signals.forEach((s) => params.append('signals', s));
     const res = await fetch(`${API}/api/predictions/history?${params}`, {
       headers: { Authorization: 'Bearer ' + this.token },
     });
@@ -150,6 +155,34 @@ const api = {
     });
     if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || 'Failed to save prompt'); }
     return res.json();
+  },
+  async analysePredictions(predictionIds) {
+    const res = await fetch(`${API}/api/predictions/analyse`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + this.token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ predictionIds }),
+    });
+    if (res.status === 401 || res.status === 403) throw new Error('SESSION_EXPIRED');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Analysis failed');
+    }
+    return res.json();
+  },
+  async getDailyAnalysis() {
+    const res = await fetch(`${API}/api/predictions/daily-analysis/latest`, {
+      headers: { Authorization: 'Bearer ' + this.token },
+    });
+    if (res.status === 401 || res.status === 403) throw new Error('SESSION_EXPIRED');
+    if (res.status === 204) return null;
+    if (!res.ok) return null;
+    return res.json();
+  },
+  async markDailyAnalysisRead(id) {
+    await fetch(`${API}/api/predictions/daily-analysis/${id}/read`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + this.token },
+    }).catch(() => {});
   },
   async getAiTools() {
     const res = await fetch(`${API}/api/admin/ai-tools`, {
@@ -962,28 +995,203 @@ function OutcomePendingIcon({ color }) {
   );
 }
 
-function PredictionHistoryDialog({ open, onClose }) {
+/** Nested modal: read-only prediction rationale from history row */
+function PredictionReasonDialog({ open, onClose, text, subtitle }) {
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="prediction-reason-overlay"
+      onClick={onClose}
+      role="presentation"
+    >
+      <div
+        className="prediction-reason-dialog"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="prediction-reason-dialog-title"
+      >
+        <div className="prediction-reason-dialog__header">
+          <div className="prediction-reason-dialog__header-text">
+            <h3 id="prediction-reason-dialog-title" className="prediction-reason-dialog__title">
+              Prediction reason
+            </h3>
+            {subtitle ? (
+              <p className="prediction-reason-dialog__meta">{subtitle}</p>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="prediction-reason-dialog__close"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div className="prediction-reason-dialog__body">
+          <div className="prediction-reason-dialog__content">{text || '—'}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const HISTORY_HORIZON_OPTIONS = [
+  { value: '5M', label: '5 Min' },
+  { value: '15M', label: '15 Min' },
+  { value: '30M', label: '30 Min' },
+];
+
+const HISTORY_SIGNAL_OPTIONS = [
+  { value: 'BUY', label: 'Buy' },
+  { value: 'SELL', label: 'Sell' },
+  { value: 'HOLD', label: 'Hold' },
+  { value: 'BULLISH', label: 'Bullish' },
+  { value: 'BEARISH', label: 'Bearish' },
+  { value: 'NEUTRAL', label: 'Neutral' },
+];
+
+const HISTORY_TABLE_COLUMNS = [
+  'Horizon',
+  'Signal',
+  'Conf',
+  'Entry',
+  'Stop Loss',
+  'Target',
+  'R:R',
+  'AI Tool',
+  'AI Model',
+  'Outcome',
+  'Actual Close',
+  'P&L',
+  'Reason',
+];
+
+function sortHorizonKeys(arr) {
+  const order = ['5M', '15M', '30M'];
+  return [...arr].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+}
+
+function sortSignalKeys(arr) {
+  const order = HISTORY_SIGNAL_OPTIONS.map((o) => o.value);
+  return [...arr].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+}
+
+/** Gemini / API messages that indicate quota or rate limiting (for highlighted notice styling). */
+function isGeminiRateLimitMessage(text) {
+  const t = String(text || '').toLowerCase();
+  return (
+    t.includes('rate limit')
+    || t.includes('429')
+    || t.includes('quota')
+    || t.includes('resource exhausted')
+    || t.includes('too many requests')
+  );
+}
+
+function PredictionHistoryDialog({ open, onClose, isAdmin }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [filterHorizon, setFilterHorizon] = useState('');
+  const [appliedHorizons, setAppliedHorizons] = useState([]);
+  const [appliedSignals, setAppliedSignals] = useState([]);
+  const [horizonDraft, setHorizonDraft] = useState([]);
+  const [signalDraft, setSignalDraft] = useState([]);
+  const [openPanel, setOpenPanel] = useState(null);
+  const filterToolbarRef = useRef(null);
   const [page, setPage] = useState(0);
+  /** Server-side order for prediction timestamp: desc = newest first, asc = oldest first */
+  const [timeSort, setTimeSort] = useState('desc');
+  const [reasonView, setReasonView] = useState(null);
+  const [analysing, setAnalysing] = useState(false);
+  const [analysis, setAnalysis] = useState(null);
+  const [analysisError, setAnalysisError] = useState(null);
   const PAGE_SIZE = 20;
+
+  /** Admins load platform-wide history; everyone else only their rows (matches backend). */
+  const effectiveScope = isAdmin ? 'all' : 'mine';
+
+  const toggleDraftValue = useCallback((setDraft, value, mode) => {
+    setDraft((prev) => {
+      const next = prev.includes(value) ? prev.filter((x) => x !== value) : [...prev, value];
+      return mode === 'horizon' ? sortHorizonKeys(next) : sortSignalKeys(next);
+    });
+  }, []);
+
+  const dismissAnalysisDialog = useCallback(() => {
+    setAnalysis(null);
+    setAnalysisError(null);
+  }, []);
+
+  useEffect(() => {
+    if (!open) setReasonView(null);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) {
+      setAnalysis(null);
+      setAnalysisError(null);
+      setAnalysing(false);
+    }
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
     setLoading(true);
-    api.getHistory(filterHorizon || null, page, PAGE_SIZE)
+    api
+      .getHistory(page, PAGE_SIZE, effectiveScope, {
+        horizons: appliedHorizons,
+        signals: appliedSignals,
+        sortTime: timeSort,
+      })
       .then(setData)
       .catch(() => setData(null))
       .finally(() => setLoading(false));
-  }, [open, filterHorizon, page]);
+  }, [open, appliedHorizons, appliedSignals, page, effectiveScope, timeSort]);
+
+  useEffect(() => {
+    if (!open || !openPanel) return;
+    const onDown = (e) => {
+      if (filterToolbarRef.current && !filterToolbarRef.current.contains(e.target)) {
+        setOpenPanel(null);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open, openPanel]);
 
   useEffect(() => {
     if (!open) return;
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      const analysisDialogHasContent = analysis != null || analysisError != null;
+      if (analysisDialogHasContent) {
+        dismissAnalysisDialog();
+        return;
+      }
+      if (openPanel) {
+        setOpenPanel(null);
+        return;
+      }
+      if (reasonView) {
+        setReasonView(null);
+      } else {
+        onClose();
+      }
+    };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  }, [open, onClose, openPanel, reasonView, analysis, analysisError, dismissAnalysisDialog]);
 
   useEffect(() => {
     if (!open) return;
@@ -994,16 +1202,75 @@ function PredictionHistoryDialog({ open, onClose }) {
     };
   }, [open]);
 
-  const applyHorizon = useCallback((h) => { setFilterHorizon(h); setPage(0); }, []);
+  const openHorizonPanel = useCallback(() => {
+    setHorizonDraft(sortHorizonKeys(appliedHorizons));
+    setOpenPanel((p) => (p === 'horizon' ? null : 'horizon'));
+  }, [appliedHorizons]);
+
+  const openSignalPanel = useCallback(() => {
+    setSignalDraft(sortSignalKeys(appliedSignals));
+    setOpenPanel((p) => (p === 'signal' ? null : 'signal'));
+  }, [appliedSignals]);
+
+  const clearHorizonDraft = useCallback(() => setHorizonDraft([]), []);
+  const clearSignalDraft = useCallback(() => setSignalDraft([]), []);
+
+  const toggleTimeSort = useCallback(() => {
+    setTimeSort((s) => (s === 'desc' ? 'asc' : 'desc'));
+    setPage(0);
+    setAnalysis(null);
+    setAnalysisError(null);
+  }, []);
+
+  const applyHorizonFilter = useCallback(() => {
+    setAppliedHorizons(sortHorizonKeys(horizonDraft));
+    setOpenPanel(null);
+    setPage(0);
+    setAnalysis(null);
+    setAnalysisError(null);
+  }, [horizonDraft]);
+
+  const applySignalFilter = useCallback(() => {
+    setAppliedSignals(sortSignalKeys(signalDraft));
+    setOpenPanel(null);
+    setPage(0);
+    setAnalysis(null);
+    setAnalysisError(null);
+  }, [signalDraft]);
+
+  const handleAnalyse = useCallback(async () => {
+    const ids = (data?.predictions || []).map(p => p.id).filter(Boolean);
+    if (ids.length === 0) return;
+    setAnalysing(true);
+    setAnalysis(null);
+    setAnalysisError(null);
+    try {
+      const result = await api.analysePredictions(ids);
+      if (result?.error) {
+        setAnalysisError(result.error);
+      } else {
+        setAnalysis(result);
+      }
+    } catch (e) {
+      setAnalysisError(e.message || 'Analysis failed');
+    } finally {
+      setAnalysing(false);
+    }
+  }, [data]);
+
+  /** Dialog opens only after the API returns (success or error). While loading, the table stays visible with a sweep indicator. */
+  const analysisDialogVisible = analysis != null || analysisError != null;
 
   if (!open) return null;
 
   const summary = data?.summary;
   const predictions = data?.predictions || [];
   const total = data?.total ?? 0;
-  const totalPages = data?.totalPages ?? 1;
+  const totalPages = Math.max(1, data?.totalPages ?? 1);
+  const showPager = !loading && total > 0 && totalPages > 1;
 
   return (
+    <>
     <div className="prediction-history-overlay" onClick={onClose} role="presentation">
       <div
         className="prediction-history-dialog"
@@ -1042,20 +1309,119 @@ function PredictionHistoryDialog({ open, onClose }) {
         </div>
       ) : null}
 
-      <div className="prediction-history-shell__filters">
-        {[{ k: '', l: 'All' }, { k: '5M', l: '5 Min' }, { k: '15M', l: '15 Min' }, { k: '30M', l: '30 Min' }].map(({ k, l }) => (
-          <button
-            key={k || 'all'}
-            type="button"
-            className={'prediction-history-shell__filter-btn' + (filterHorizon === k ? ' prediction-history-shell__filter-btn--active' : '')}
-            onClick={() => applyHorizon(k)}
-          >
-            {l}
-          </button>
-        ))}
-      </div>
-
       <div className="prediction-history-shell__table-scroll">
+        <div className="prediction-history-shell__table-head-sticky">
+          <div className="prediction-history-shell__table-toolbar" ref={filterToolbarRef}>
+          <div className="prediction-history-shell__filter-dropdown">
+            <button
+              type="button"
+              className={
+                'prediction-history-shell__filter-trigger' +
+                (openPanel === 'horizon' ? ' prediction-history-shell__filter-trigger--open' : '') +
+                (appliedHorizons.length > 0 ? ' prediction-history-shell__filter-trigger--active' : '')
+              }
+              onClick={openHorizonPanel}
+              aria-expanded={openPanel === 'horizon'}
+              aria-haspopup="true"
+            >
+              Horizon
+              {appliedHorizons.length > 0 ? (
+                <span className="prediction-history-shell__filter-trigger-badge">{appliedHorizons.length}</span>
+              ) : null}
+            </button>
+            {openPanel === 'horizon' ? (
+              <div className="prediction-history-shell__filter-panel" role="dialog" aria-label="Horizon filter">
+                <ul className="prediction-history-shell__filter-checklist">
+                  {HISTORY_HORIZON_OPTIONS.map(({ value, label }) => (
+                    <li key={value}>
+                      <label className="prediction-history-shell__filter-check-label">
+                        <input
+                          type="checkbox"
+                          checked={horizonDraft.includes(value)}
+                          onChange={() => toggleDraftValue(setHorizonDraft, value, 'horizon')}
+                        />
+                        <span>{label}</span>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+                <div className="prediction-history-shell__filter-panel-actions">
+                  <button type="button" className="prediction-history-shell__filter-panel-btn" onClick={clearHorizonDraft}>
+                    Clear
+                  </button>
+                  <button
+                    type="button"
+                    className="prediction-history-shell__filter-panel-btn prediction-history-shell__filter-panel-btn--primary"
+                    onClick={applyHorizonFilter}
+                  >
+                    Apply
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="prediction-history-shell__filter-dropdown">
+            <button
+              type="button"
+              className={
+                'prediction-history-shell__filter-trigger' +
+                (openPanel === 'signal' ? ' prediction-history-shell__filter-trigger--open' : '') +
+                (appliedSignals.length > 0 ? ' prediction-history-shell__filter-trigger--active' : '')
+              }
+              onClick={openSignalPanel}
+              aria-expanded={openPanel === 'signal'}
+              aria-haspopup="true"
+            >
+              Signal
+              {appliedSignals.length > 0 ? (
+                <span className="prediction-history-shell__filter-trigger-badge">{appliedSignals.length}</span>
+              ) : null}
+            </button>
+            {openPanel === 'signal' ? (
+              <div className="prediction-history-shell__filter-panel" role="dialog" aria-label="Signal filter">
+                <ul className="prediction-history-shell__filter-checklist">
+                  {HISTORY_SIGNAL_OPTIONS.map(({ value, label }) => (
+                    <li key={value}>
+                      <label className="prediction-history-shell__filter-check-label">
+                        <input
+                          type="checkbox"
+                          checked={signalDraft.includes(value)}
+                          onChange={() => toggleDraftValue(setSignalDraft, value, 'signal')}
+                        />
+                        <span>{label}</span>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+                <div className="prediction-history-shell__filter-panel-actions">
+                  <button type="button" className="prediction-history-shell__filter-panel-btn" onClick={clearSignalDraft}>
+                    Clear
+                  </button>
+                  <button
+                    type="button"
+                    className="prediction-history-shell__filter-panel-btn prediction-history-shell__filter-panel-btn--primary"
+                    onClick={applySignalFilter}
+                  >
+                    Apply
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+        </div>
+        <div
+          className={
+            'prediction-history-shell__table-body-wrap' +
+            (analysing ? ' prediction-history-shell__table-body-wrap--analysing' : '')
+          }
+        >
+          {analysing ? (
+            <span className="sr-only" aria-live="polite">
+              Analysis is running in the background.
+            </span>
+          ) : null}
           {loading ? (
             <div className="prediction-history-shell__center-msg">Loading predictions…</div>
           ) : predictions.length === 0 ? (
@@ -1067,7 +1433,29 @@ function PredictionHistoryDialog({ open, onClose }) {
             <table className="prediction-history-shell__table">
               <thead>
                 <tr className="prediction-history-shell__thead-row">
-                  {['Time (IST)', 'Horizon', 'Signal', 'Conf', 'Entry', 'Stop Loss', 'Target', 'R:R', 'AI Tool', 'AI Model', 'Outcome', 'Actual Close', 'P&L'].map(col => (
+                  <th
+                    className="prediction-history-shell__th prediction-history-shell__th--sortable"
+                    aria-sort={timeSort === 'desc' ? 'descending' : 'ascending'}
+                    scope="col"
+                  >
+                    <button
+                      type="button"
+                      className="prediction-history-shell__sort-trigger"
+                      onClick={toggleTimeSort}
+                      title={timeSort === 'desc' ? 'Newest first — click for oldest first' : 'Oldest first — click for newest first'}
+                      aria-label={
+                        timeSort === 'desc'
+                          ? 'Sorted by time newest first. Activate to sort oldest first.'
+                          : 'Sorted by time oldest first. Activate to sort newest first.'
+                      }
+                    >
+                      Time (IST)
+                      <span className="prediction-history-shell__sort-arrow" aria-hidden>
+                        {timeSort === 'desc' ? '↓' : '↑'}
+                      </span>
+                    </button>
+                  </th>
+                  {HISTORY_TABLE_COLUMNS.map((col) => (
                     <th key={col} className="prediction-history-shell__th">{col}</th>
                   ))}
                 </tr>
@@ -1124,41 +1512,212 @@ function PredictionHistoryDialog({ open, onClose }) {
                       <td style={{ padding: '8px 10px', fontWeight: 700, whiteSpace: 'nowrap', color: pnl == null ? '#94a3b8' : pnl >= 0 ? '#16a34a' : '#dc2626' }}>
                         {pnl == null ? '—' : `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`}
                       </td>
+                      <td style={{ padding: '8px 10px', textAlign: 'center', verticalAlign: 'middle' }}>
+                        {p.predictionReason && String(p.predictionReason).trim() ? (
+                          <button
+                            type="button"
+                            className="prediction-reason-view-btn"
+                            onClick={() =>
+                              setReasonView({
+                                text: String(p.predictionReason).trim(),
+                                subtitle: `${timeStr} · ${p.horizon || '—'}`,
+                              })
+                            }
+                          >
+                            View
+                          </button>
+                        ) : (
+                          <span style={{ color: '#94a3b8', fontSize: 12 }}>—</span>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
           )}
+          {analysing ? (
+            <div className="prediction-history-shell__flashlight-overlay" aria-hidden="true">
+              <div className="prediction-history-shell__flashlight-beam" />
+            </div>
+          ) : null}
+        </div>
       </div>
 
-      {!loading && total > 0 ? (
-        <footer className="prediction-history-shell__footer">
-          <span className="prediction-history-shell__footer-meta">
-            Page {page + 1} of {Math.max(1, totalPages)}
-          </span>
-          <div className="prediction-history-shell__pager">
-            <button
-              type="button"
-              className="prediction-history-shell__page-btn"
-              onClick={() => setPage(p => Math.max(0, p - 1))}
-              disabled={page === 0}
-            >
-              ← Prev
-            </button>
-            <button
-              type="button"
-              className="prediction-history-shell__page-btn"
-              onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
-              disabled={page >= totalPages - 1}
-            >
-              Next →
-            </button>
-          </div>
+      {!loading && predictions.length > 0 ? (
+        <footer className="prediction-history-shell__footer prediction-history-shell__footer--split">
+          <button
+            type="button"
+            className="prediction-history-analyse-btn"
+            onClick={handleAnalyse}
+            disabled={analysing}
+            aria-label="Analyse current page predictions with AI"
+          >
+            {analysing ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <span className="analyse-spinner" aria-hidden="true" />
+                Analysing…
+              </span>
+            ) : 'Analyse'}
+          </button>
+
+          {showPager ? (
+            <nav className="prediction-history-shell__pager-stack" aria-label="Table pagination">
+              <div className="prediction-history-shell__pager-arrows">
+                <button
+                  type="button"
+                  className="prediction-history-shell__page-btn prediction-history-shell__page-btn--arrow"
+                  onClick={() => setPage(p => Math.max(0, p - 1))}
+                  disabled={page === 0}
+                  aria-label="Previous page"
+                >
+                  ‹
+                </button>
+                <button
+                  type="button"
+                  className="prediction-history-shell__page-btn prediction-history-shell__page-btn--arrow"
+                  onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+                  disabled={page >= totalPages - 1}
+                  aria-label="Next page"
+                >
+                  ›
+                </button>
+              </div>
+              <span className="prediction-history-shell__pager-caption" aria-live="polite">
+                {page + 1} / {totalPages}
+              </span>
+            </nav>
+          ) : null}
         </footer>
       ) : null}
       </div>
     </div>
+
+    {analysisDialogVisible ? (
+      <div className="prediction-analysis-overlay" onClick={dismissAnalysisDialog} role="presentation">
+        <div
+          className="prediction-analysis-dialog"
+          onClick={(e) => e.stopPropagation()}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="prediction-analysis-dialog-title"
+        >
+          <header className="prediction-analysis-dialog__header">
+            <h3 id="prediction-analysis-dialog-title" className="prediction-analysis-dialog__title">
+              AI analysis
+            </h3>
+            <button
+              type="button"
+              className="prediction-analysis-dialog__close"
+              onClick={dismissAnalysisDialog}
+              aria-label="Close analysis"
+            >
+              ×
+            </button>
+          </header>
+          <div className="prediction-analysis-dialog__body">
+            {analysisError ? (
+              <div
+                className={
+                  'prediction-analysis-dialog__notice' +
+                  (isGeminiRateLimitMessage(analysisError)
+                    ? ' prediction-analysis-dialog__notice--rate-limit'
+                    : ' prediction-analysis-dialog__notice--error')
+                }
+                role="alert"
+              >
+                {analysisError}
+              </div>
+            ) : null}
+
+            {analysis && !analysisError ? (
+              <>
+                {analysis.overall_assessment ? (
+                  <div className="prediction-analysis-section">
+                    <div className="prediction-analysis-section__label">Overall Assessment</div>
+                    <p className="prediction-analysis-section__text">{analysis.overall_assessment}</p>
+                  </div>
+                ) : null}
+
+                {analysis.what_went_wrong?.length > 0 ? (
+                  <div className="prediction-analysis-section">
+                    <div className="prediction-analysis-section__label prediction-analysis-section__label--red">What Went Wrong</div>
+                    <ul className="prediction-analysis-list">
+                      {analysis.what_went_wrong.map((item, i) => (
+                        <li key={i} className="prediction-analysis-list__item prediction-analysis-list__item--red">{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {analysis.patterns?.length > 0 ? (
+                  <div className="prediction-analysis-section">
+                    <div className="prediction-analysis-section__label prediction-analysis-section__label--amber">Patterns Observed</div>
+                    <ul className="prediction-analysis-list">
+                      {analysis.patterns.map((item, i) => (
+                        <li key={i} className="prediction-analysis-list__item prediction-analysis-list__item--amber">{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {analysis.what_can_improve?.length > 0 ? (
+                  <div className="prediction-analysis-section">
+                    <div className="prediction-analysis-section__label prediction-analysis-section__label--blue">What Can Improve</div>
+                    <ul className="prediction-analysis-list">
+                      {analysis.what_can_improve.map((item, i) => (
+                        <li key={i} className="prediction-analysis-list__item prediction-analysis-list__item--blue">{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {analysis.recommendations?.length > 0 ? (
+                  <div className="prediction-analysis-section">
+                    <div className="prediction-analysis-section__label prediction-analysis-section__label--green">Recommendations</div>
+                    <ul className="prediction-analysis-list">
+                      {analysis.recommendations.map((item, i) => (
+                        <li key={i} className="prediction-analysis-list__item prediction-analysis-list__item--green">{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {analysis.reason_quality?.length > 0 ? (
+                  <div className="prediction-analysis-section">
+                    <div className="prediction-analysis-section__label">Reason Quality</div>
+                    <div className="prediction-analysis-reason-grid">
+                      {analysis.reason_quality.map((rq, i) => (
+                        <div key={i} className="prediction-analysis-reason-card">
+                          <div className="prediction-analysis-reason-card__meta">
+                            <span style={{ fontWeight: 600, color: '#0f172a', fontSize: 12 }}>ID {rq.id}</span>
+                            <span
+                              className="prediction-analysis-reason-card__score"
+                              style={{ color: rq.quality_score >= 7 ? '#16a34a' : rq.quality_score >= 4 ? '#d97706' : '#dc2626' }}
+                            >
+                              {rq.quality_score}/10
+                            </span>
+                          </div>
+                          <p className="prediction-analysis-reason-card__feedback">{rq.feedback}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    ) : null}
+
+    <PredictionReasonDialog
+      open={!!reasonView}
+      onClose={() => setReasonView(null)}
+      text={reasonView?.text ?? ''}
+      subtitle={reasonView?.subtitle ?? ''}
+    />
+    </>
   );
 }
 
@@ -2024,7 +2583,27 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
   const instrumentsRef = useRef(null);
   const sidebarRef = useRef(null);
 
-  const { connected, livePrediction, livePrice, connectionError, setHorizon: wsSetHorizon } = useStomp(accessToken);
+  const { connected, livePrediction, livePrice, dailyAnalysis: wsDailyAnalysis, connectionError, setHorizon: wsSetHorizon } = useStomp(accessToken);
+  const [dailyAnalysisPopup, setDailyAnalysisPopup] = useState(null);
+
+  // On login: fetch any unread daily analysis from the server
+  useEffect(() => {
+    api.getDailyAnalysis()
+      .then(data => { if (data) setDailyAnalysisPopup(data); })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Real-time: show popup when pushed via WebSocket
+  useEffect(() => {
+    if (wsDailyAnalysis) setDailyAnalysisPopup(wsDailyAnalysis);
+  }, [wsDailyAnalysis]);
+
+  const dismissDailyAnalysis = useCallback(() => {
+    const id = dailyAnalysisPopup?.id;
+    setDailyAnalysisPopup(null);
+    if (id) api.markDailyAnalysisRead(id);
+  }, [dailyAnalysisPopup]);
 
   const isLive = connected && livePrediction?.horizon === horizon;
   const prediction = isLive ? livePrediction : restPrediction;
@@ -2478,7 +3057,8 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
         </div>
       </div>
 
-      <PredictionHistoryDialog open={historyOpen} onClose={() => setHistoryOpen(false)} />
+      <PredictionHistoryDialog open={historyOpen} onClose={() => setHistoryOpen(false)} isAdmin={user?.role === 'ADMIN'} />
+      <DailyAnalysisPopup data={dailyAnalysisPopup} onDismiss={dismissDailyAnalysis} />
 
       {settingsOpen ? (
         <div
@@ -2567,6 +3147,95 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
       {aiPromptOpen && user?.role === 'ADMIN' ? (
         <AiManagementModal onClose={() => setAiPromptOpen(false)} />
       ) : null}
+    </div>
+  );
+}
+
+// ── Daily Analysis Popup ──
+function DailyAnalysisPopup({ data, onDismiss }) {
+  if (!data) return null;
+
+  const sections = [
+    { key: 'overall_assessment', label: 'Overall Assessment', type: 'text' },
+    { key: 'what_went_wrong',    label: 'What Went Wrong',    type: 'list', color: '#dc2626' },
+    { key: 'patterns',           label: 'Patterns Observed',  type: 'list', color: '#d97706' },
+    { key: 'what_can_improve',   label: 'What Can Improve',   type: 'list', color: '#2563eb' },
+    { key: 'recommendations',    label: 'Recommendations',    type: 'list', color: '#16a34a' },
+  ];
+
+  return (
+    <div className="daily-analysis-overlay" role="dialog" aria-modal="true" aria-labelledby="da-title">
+      <div className="daily-analysis-modal" onClick={e => e.stopPropagation()}>
+        <div className="daily-analysis-modal__header">
+          <div>
+            <div className="daily-analysis-modal__eyebrow">End-of-Day Analysis</div>
+            <h2 id="da-title" className="daily-analysis-modal__title">
+              {data.analysisDate ? `${data.analysisDate} · ` : ''}{data.predictionCount ?? 0} predictions reviewed
+            </h2>
+          </div>
+          <button
+            type="button"
+            className="daily-analysis-modal__close"
+            onClick={onDismiss}
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="daily-analysis-modal__body">
+          {sections.map(({ key, label, type, color }) => {
+            const val = data[key];
+            if (!val || (Array.isArray(val) && val.length === 0)) return null;
+            return (
+              <div key={key} className="daily-analysis-modal__section">
+                <div className="daily-analysis-modal__section-label" style={color ? { color } : undefined}>
+                  {label}
+                </div>
+                {type === 'text' ? (
+                  <p className="daily-analysis-modal__section-text">{val}</p>
+                ) : (
+                  <ul className="daily-analysis-modal__list">
+                    {val.map((item, i) => (
+                      <li key={i} className="daily-analysis-modal__list-item" style={color ? { color } : undefined}>
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            );
+          })}
+
+          {data.reason_quality?.length > 0 && (
+            <div className="daily-analysis-modal__section">
+              <div className="daily-analysis-modal__section-label">Reason Quality</div>
+              <div className="daily-analysis-modal__rq-grid">
+                {data.reason_quality.map((rq, i) => (
+                  <div key={i} className="daily-analysis-modal__rq-card">
+                    <div className="daily-analysis-modal__rq-meta">
+                      <span style={{ fontWeight: 600, fontSize: 12, color: '#7eb8f7' }}>ID {rq.id}</span>
+                      <span style={{
+                        fontWeight: 700, fontSize: 12,
+                        color: rq.quality_score >= 7 ? '#16a34a' : rq.quality_score >= 4 ? '#d97706' : '#dc2626',
+                      }}>
+                        {rq.quality_score}/10
+                      </span>
+                    </div>
+                    <p className="daily-analysis-modal__rq-feedback">{rq.feedback}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="daily-analysis-modal__footer">
+          <button type="button" className="daily-analysis-modal__dismiss-btn" onClick={onDismiss}>
+            Got it
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

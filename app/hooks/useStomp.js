@@ -21,6 +21,7 @@ export function useStomp(accessToken) {
   const [connectionError, setConnectionError] = useState(null);
   const [livePrediction, setLivePrediction] = useState(null);
   const [livePrice, setLivePrice] = useState(null);
+  const [dailyAnalysis, setDailyAnalysis] = useState(null);
   const activeHorizonRef = useRef('15M');
 
   const disconnect = useCallback(() => {
@@ -75,6 +76,14 @@ export function useStomp(accessToken) {
           }
         });
 
+        client.subscribe('/user/topic/daily-analysis', (msg) => {
+          try {
+            setDailyAnalysis(JSON.parse(msg.body));
+          } catch {
+            /* ignore */
+          }
+        });
+
         client.publish({
           destination: '/app/predict/subscribe',
           body: JSON.stringify({ horizon: activeHorizonRef.current }),
@@ -123,5 +132,5 @@ export function useStomp(accessToken) {
     return () => disconnect();
   }, [accessToken, connect, disconnect]);
 
-  return { connected, livePrediction, livePrice, connectionError, setHorizon };
+  return { connected, livePrediction, livePrice, dailyAnalysis, connectionError, setHorizon };
 }
