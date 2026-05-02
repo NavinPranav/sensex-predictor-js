@@ -286,7 +286,7 @@ function Login({ onLogin }) {
     setError(''); setLoading(true);
     try {
       const data = isReg ? await api.register(name, email, pass) : await api.login(email, pass);
-      onLogin({ name: data.name, email: data.email });
+      onLogin({ name: data.name, email: data.email, role: data.role || 'USER' });
     } catch (e) { setError(e.message); } finally { setLoading(false); }
   };
 
@@ -1109,6 +1109,8 @@ function PredictionHistoryDialog({ open, onClose, isAdmin }) {
   const [signalDraft, setSignalDraft] = useState([]);
   const [openPanel, setOpenPanel] = useState(null);
   const filterToolbarRef = useRef(null);
+  const headStickyRef = useRef(null);
+  const tableScrollRef = useRef(null);
   const [page, setPage] = useState(0);
   /** Server-side order for prediction timestamp: desc = newest first, asc = oldest first */
   const [timeSort, setTimeSort] = useState('desc');
@@ -1158,6 +1160,25 @@ function PredictionHistoryDialog({ open, onClose, isAdmin }) {
       .catch(() => setData(null))
       .finally(() => setLoading(false));
   }, [open, appliedHorizons, appliedSignals, page, effectiveScope, timeSort]);
+
+  const syncFilterStickyOffset = useCallback(() => {
+    const head = headStickyRef.current;
+    const scroll = tableScrollRef.current;
+    if (!head || !scroll) return;
+    const h = Math.ceil(head.getBoundingClientRect().height);
+    scroll.style.setProperty('--prediction-filter-sticky-height', `${h}px`);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const head = headStickyRef.current;
+    const scroll = tableScrollRef.current;
+    if (!head || !scroll) return;
+    syncFilterStickyOffset();
+    const ro = new ResizeObserver(() => syncFilterStickyOffset());
+    ro.observe(head);
+    return () => ro.disconnect();
+  }, [open, syncFilterStickyOffset, appliedHorizons, appliedSignals, openPanel]);
 
   useEffect(() => {
     if (!open || !openPanel) return;
@@ -1309,8 +1330,8 @@ function PredictionHistoryDialog({ open, onClose, isAdmin }) {
         </div>
       ) : null}
 
-      <div className="prediction-history-shell__table-scroll">
-        <div className="prediction-history-shell__table-head-sticky">
+      <div className="prediction-history-shell__table-scroll" ref={tableScrollRef}>
+        <div className="prediction-history-shell__table-head-sticky" ref={headStickyRef}>
           <div className="prediction-history-shell__table-toolbar" ref={filterToolbarRef}>
           <div className="prediction-history-shell__filter-dropdown">
             <button
@@ -3278,7 +3299,10 @@ export default function Home() {
   }, []);
 
   const logout = () => { api.logout(); setUser(null); setAccessToken(null); };
-  const onLogin = (u) => { setUser(u); setAccessToken(api.token); };
+  const onLogin = (u) => {
+    setUser({ name: u.name, email: u.email, role: u.role || 'USER' });
+    setAccessToken(api.token);
+  };
   const onUserUpdate = (patch) => {
     setUser(prev => {
       if (!prev) return prev;

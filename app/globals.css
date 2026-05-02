@@ -665,6 +665,8 @@
   -webkit-overflow-scrolling: touch;
   display: flex;
   flex-direction: column;
+  /* Set by JS from the sticky filter band height so column headers stick below it */
+  --prediction-filter-sticky-height: 56px;
 }
 
 /* Sticky band: optional sweep (during AI analyse) + filter toolbar — table body scrolls underneath */
@@ -989,8 +991,9 @@
   white-space: nowrap;
   border-bottom: 1px solid #e5e7eb;
   position: sticky;
-  top: 0;
-  z-index: 1;
+  /* Below `.table-head-sticky` (z-index 6); offset matches measured filter band height */
+  top: var(--prediction-filter-sticky-height, 56px);
+  z-index: 4;
   background: #f8fafc;
 }
 
