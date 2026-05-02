@@ -665,15 +665,10 @@
   -webkit-overflow-scrolling: touch;
   display: flex;
   flex-direction: column;
-  /* Set by JS from the sticky filter band height so column headers stick below it */
-  --prediction-filter-sticky-height: 56px;
 }
 
-/* Sticky band: optional sweep (during AI analyse) + filter toolbar — table body scrolls underneath */
+/* Filter toolbar + horizon/signal controls — scrolls with the table (not sticky) */
 .prediction-history-shell__table-head-sticky {
-  position: sticky;
-  top: 0;
-  z-index: 6;
   flex-shrink: 0;
   background: #fff;
   border-bottom: 1px solid #e5e7eb;
@@ -695,8 +690,7 @@
 
 /*
  * Tiny synchronized “jog” while analysing — same duration as the shimmer sweep.
- * Sub-pixel only; skipped when prefers-reduced-motion. If sticky thead ever misbehaves in a browser,
- * remove this block only (shimmer continues to work).
+ * Sub-pixel only; skipped when prefers-reduced-motion. Remove this block only if undesired.
  */
 .prediction-history-shell__table-body-wrap--analysing {
   animation: prediction-history-table-jog 2.15s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
@@ -990,10 +984,6 @@
   letter-spacing: 0.03em;
   white-space: nowrap;
   border-bottom: 1px solid #e5e7eb;
-  position: sticky;
-  /* Below `.table-head-sticky` (z-index 6); offset matches measured filter band height */
-  top: var(--prediction-filter-sticky-height, 56px);
-  z-index: 4;
   background: #f8fafc;
 }
 
