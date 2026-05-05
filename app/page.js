@@ -199,6 +199,13 @@ const api = {
     if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || 'Failed to activate model'); }
     return res.json();
   },
+  async getNewsSentiment() {
+    const res = await fetch(`${API}/api/news/sentiment`, {
+      headers: { Authorization: 'Bearer ' + this.token },
+    });
+    if (!res.ok) return { overall: 'UNAVAILABLE', score: 0, article_count: 0, bullish_count: 0, bearish_count: 0, neutral_count: 0, top_headlines: [] };
+    return res.json();
+  },
   async getChecklistWeight() {
     const res = await fetch(`${API}/api/admin/checklist-weight`, {
       headers: { Authorization: 'Bearer ' + this.token },
@@ -213,6 +220,59 @@ const api = {
       body: JSON.stringify({ weight }),
     });
     if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || 'Failed to save weight'); }
+    return res.json();
+  },
+  async getPredictionPolicy() {
+    const res = await fetch(`${API}/api/admin/prediction-policy`, {
+      headers: { Authorization: 'Bearer ' + this.token },
+    });
+    if (!res.ok) return null;
+    return res.json();
+  },
+  async setPredictionPolicy(payload) {
+    const res = await fetch(`${API}/api/admin/prediction-policy`, {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer ' + this.token, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const d = err.detail;
+      const detailMsg = Array.isArray(d) ? d.map((x) => (typeof x === 'string' ? x : x.msg || JSON.stringify(x))).join('; ') : d;
+      throw new Error(err.error || detailMsg || 'Failed to save prediction policy');
+    }
+    return res.json();
+  },
+  async resetPredictionPolicy() {
+    const res = await fetch(`${API}/api/admin/prediction-policy`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer ' + this.token },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to reset prediction policy');
+    }
+    return res.json();
+  },
+  async getMyRiskSettings() {
+    const res = await fetch(`${API}/api/me/risk-settings`, {
+      headers: { Authorization: 'Bearer ' + this.token },
+    });
+    if (res.status === 401 || res.status === 403) throw new Error('SESSION_EXPIRED');
+    if (!res.ok) return null;
+    return res.json();
+  },
+  async updateMyRiskSettings(body) {
+    const res = await fetch(`${API}/api/me/risk-settings`, {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer ' + this.token, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 401 || res.status === 403) throw new Error('SESSION_EXPIRED');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to save risk settings');
+    }
     return res.json();
   },
   async listAdminUsers(page, size) {
@@ -2463,6 +2523,144 @@ function AdminAiModelSection() {
   );
 }
 
+// ── News Sentiment Card ──────────────────────────────────────────────────────
+const NEWS_SENTIMENT_COLORS = {
+  BULLISH:     { color: '#16a34a', bg: '#dcfce7', bar: '#16a34a' },
+  BEARISH:     { color: '#dc2626', bg: '#fee2e2', bar: '#dc2626' },
+  NEUTRAL:     { color: '#d97706', bg: '#fef9c3', bar: '#d97706' },
+  UNAVAILABLE: { color: '#94a3b8', bg: '#f1f5f9', bar: '#cbd5e1' },
+};
+
+function NewsSentimentCard() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const load = useCallback(async (force = false) => {
+    if (force) setRefreshing(true);
+    try {
+      const result = await api.getNewsSentiment();
+      setData(result);
+    } catch {
+      /* keep stale data on error */
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    // Re-fetch every 15 min to stay in sync with server-side TTL
+    const id = setInterval(() => load(), 15 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [load]);
+
+  if (loading) {
+    return (
+      <div className="news-sentiment-card news-sentiment-card--loading">
+        <span style={{ fontSize: 12, color: '#94a3b8' }}>Loading market news…</span>
+      </div>
+    );
+  }
+
+  const overall = data?.overall ?? 'UNAVAILABLE';
+  const scheme = NEWS_SENTIMENT_COLORS[overall] ?? NEWS_SENTIMENT_COLORS.UNAVAILABLE;
+  const score = typeof data?.score === 'number' ? data.score : 0;
+  // Map score -1..+1 → bar fill 0..100%
+  const barPct = Math.round(((score + 1) / 2) * 100);
+  const headlines = data?.top_headlines ?? [];
+  const isUnavailable = overall === 'UNAVAILABLE';
+
+  return (
+    <div className="news-sentiment-card">
+      {/* Header: collapsed shows only "Market News" + chevron; click expands sentiment details */}
+      <div
+        className="news-sentiment-card__header"
+        onClick={() => setExpanded(e => !e)}
+        style={{ cursor: 'pointer' }}
+        aria-expanded={expanded}
+        aria-label={expanded ? 'Market news details expanded, click to collapse' : 'Market news collapsed, click to show sentiment and headlines'}
+      >
+        <div className="news-sentiment-card__left">
+          <span className="news-sentiment-card__label">Market News</span>
+          {expanded && !isUnavailable && (
+            <>
+              <span className="news-sentiment-card__badge" style={{ color: scheme.color, background: scheme.bg }}>
+                {overall}
+              </span>
+              <span className="news-sentiment-card__counts">
+                <span style={{ color: '#16a34a' }}>↑{data.bullish_count}</span>
+                {' '}
+                <span style={{ color: '#dc2626' }}>↓{data.bearish_count}</span>
+                {' '}
+                <span style={{ color: '#94a3b8' }}>→{data.neutral_count}</span>
+              </span>
+            </>
+          )}
+        </div>
+        <div className="news-sentiment-card__right">
+          {expanded && data?.fetched_at_ist && (
+            <span className="news-sentiment-card__time">{data.fetched_at_ist.slice(11, 16)} IST</span>
+          )}
+          {expanded && (
+            <button
+              type="button"
+              className="news-sentiment-card__refresh"
+              onClick={e => { e.stopPropagation(); load(true); }}
+              disabled={refreshing}
+              aria-label="Refresh news"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block', animation: refreshing ? 'news-spin 0.7s linear infinite' : 'none' }} aria-hidden>
+                <polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+              </svg>
+            </button>
+          )}
+          <span className="news-sentiment-card__chevron" style={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden>▾</span>
+        </div>
+      </div>
+
+      {/* Score bar — only after expanding */}
+      {expanded && !isUnavailable && (
+        <div className="news-sentiment-card__bar-wrap">
+          <div className="news-sentiment-card__bar-track">
+            <div className="news-sentiment-card__bar-fill" style={{ width: `${barPct}%`, background: scheme.bar }} />
+            <div className="news-sentiment-card__bar-mid" />
+          </div>
+          <div className="news-sentiment-card__bar-labels">
+            <span>Bearish</span><span>Neutral</span><span>Bullish</span>
+          </div>
+        </div>
+      )}
+
+      {expanded && isUnavailable && (
+        <p className="news-sentiment-card__unavailable">
+          {data?.error ?? 'News API not configured. Set NEWS_API_KEY in the ML service environment.'}
+        </p>
+      )}
+
+      {/* Headlines — only when expanded */}
+      {expanded && headlines.length > 0 && (
+        <ul className="news-sentiment-card__headlines">
+          {headlines.map((h, i) => {
+            const hScheme = NEWS_SENTIMENT_COLORS[h.label] ?? NEWS_SENTIMENT_COLORS.NEUTRAL;
+            return (
+              <li key={i} className="news-sentiment-card__headline">
+                <span className="news-sentiment-card__headline-score" style={{ color: hScheme.color }}>
+                  {h.score >= 0 ? '+' : ''}{h.score.toFixed(2)}
+                </span>
+                <span className="news-sentiment-card__headline-text">{h.title}</span>
+                {h.source && <span className="news-sentiment-card__headline-source">{h.source}</span>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function AdminPromptSection({ embedded }) {
   const [promptText, setPromptText] = useState(DEFAULT_PROMPT_HINT);
   const [label, setLabel] = useState('');
@@ -2534,16 +2732,22 @@ function AdminPromptSection({ embedded }) {
         Customise the system prompt sent to Gemini for every prediction. The following dynamic variables are
         substituted at runtime — you <strong>must</strong> include them:
       </p>
-      <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: 12, lineHeight: 1.7 }}>
-        <code style={{ display: 'block', color: '#0f172a' }}>
-          <strong>{'{target_minutes}'}</strong> — number of minutes ahead for this horizon (e.g. 5 for 5M, 15 for 15M, 30 for 30M)
-        </code>
-        <code style={{ display: 'block', color: '#0f172a' }}>
-          <strong>{'{checklist_weight}'}</strong> — checklist signal weight % (set below, appended automatically)
-        </code>
-        <code style={{ display: 'block', color: '#0f172a' }}>
-          <strong>{'{remaining_weight}'}</strong> — remaining % for AI&apos;s own OHLCV analysis (= 100 − checklist_weight)
-        </code>
+      <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: 12, lineHeight: 1.8 }}>
+        <div style={{ fontWeight: 600, color: '#374151', marginBottom: 4 }}>Required</div>
+        <code style={{ display: 'block', color: '#0f172a' }}><strong>{'{target_minutes}'}</strong> — horizon in minutes (5, 15, 30…)</code>
+        <div style={{ fontWeight: 600, color: '#374151', margin: '8px 0 4px' }}>Price &amp; OHLC</div>
+        <code style={{ display: 'block', color: '#475569' }}>{'{spot_price}'} · {'{open}'} · {'{high}'} · {'{low}'} · {'{prev_close}'} · {'{day_change_pct}'}</code>
+        <div style={{ fontWeight: 600, color: '#374151', margin: '8px 0 4px' }}>Technical indicators</div>
+        <code style={{ display: 'block', color: '#475569' }}>{'{ema_20}'} · {'{ema_50}'} · {'{rsi_14}'} · {'{vwap}'} · {'{atr_14}'}</code>
+        <code style={{ display: 'block', color: '#475569' }}>{'{macd}'} · {'{macd_signal}'} · {'{macd_histogram}'} · {'{volume_ratio}'}</code>
+        <div style={{ fontWeight: 600, color: '#374151', margin: '8px 0 4px' }}>Volatility &amp; levels</div>
+        <code style={{ display: 'block', color: '#475569' }}>{'{india_vix}'} · {'{vix_change}'} · {'{pivot}'} · {'{support_1}'} · {'{support_2}'} · {'{resistance_1}'} · {'{resistance_2}'}</code>
+        <div style={{ fontWeight: 600, color: '#374151', margin: '8px 0 4px' }}>Context</div>
+        <code style={{ display: 'block', color: '#475569' }}>{'{market_phase}'} · {'{time_ist}'} · {'{last_5_candles}'}</code>
+        <div style={{ fontWeight: 600, color: '#374151', margin: '8px 0 4px' }}>Policy (auto-filled from settings)</div>
+        <code style={{ display: 'block', color: '#475569' }}>{'{min_confidence}'} · {'{min_risk_reward}'}</code>
+        <div style={{ fontWeight: 600, color: '#374151', margin: '8px 0 4px' }}>Appended automatically — do not include in template</div>
+        <code style={{ display: 'block', color: '#94a3b8' }}>{'{checklist_weight}'} · {'{remaining_weight}'} — added by the checklist suffix block</code>
       </div>
 
       <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, padding: '12px 14px', marginBottom: 16 }}>
@@ -2656,6 +2860,301 @@ function AdminPromptSection({ embedded }) {
   );
 }
 
+/** Live-tunable prediction thresholds (ML service). Labels avoid vendor-specific naming. */
+function AdminAdjustmentsSection({ embedded }) {
+  const emptyPolicy = () => ({
+    minConfidence: 65,
+    minRiskReward: 1.5,
+    strongTrendMinEmaGapPct: 0.1,
+    relaxedConfidenceFloorStrongTrend: 58,
+    sellNearSupportMinConfidence: 72,
+    minAtrPctOfPrice: 0,
+    rateLimitMaxRetries: 4,
+    rateLimitRetryBaseDelaySec: 8,
+  });
+
+  const [policy, setPolicy] = useState(emptyPolicy);
+  const [envDefaults, setEnvDefaults] = useState(null);
+  const [hasOverrides, setHasOverrides] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState(null);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    api.getPredictionPolicy()
+      .then((d) => {
+        if (!d) return;
+        setPolicy({
+          minConfidence: Number(d.minConfidence),
+          minRiskReward: Number(d.minRiskReward),
+          strongTrendMinEmaGapPct: Number(d.strongTrendMinEmaGapPct),
+          relaxedConfidenceFloorStrongTrend: Number(d.relaxedConfidenceFloorStrongTrend),
+          sellNearSupportMinConfidence: Number(d.sellNearSupportMinConfidence),
+          minAtrPctOfPrice: Number(d.minAtrPctOfPrice),
+          rateLimitMaxRetries: Number(d.rateLimitMaxRetries),
+          rateLimitRetryBaseDelaySec: Number(d.rateLimitRetryBaseDelaySec),
+        });
+        setHasOverrides(Boolean(d.hasActiveOverrides));
+        if (d.envDefaults) setEnvDefaults(d.envDefaults);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function handleSave() {
+    setSaving(true);
+    setStatus(null);
+    try {
+      await api.setPredictionPolicy(policy);
+      setStatus({ type: 'ok', msg: 'Adjustments saved. They apply to new predictions immediately.' });
+      load();
+    } catch (e) {
+      setStatus({ type: 'error', msg: e.message });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleReset() {
+    setSaving(true);
+    setStatus(null);
+    try {
+      await api.resetPredictionPolicy();
+      setStatus({ type: 'ok', msg: 'Reverted to server environment defaults.' });
+      load();
+    } catch (e) {
+      setStatus({ type: 'error', msg: e.message });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const row = (label, help, key, opts = {}) => (
+    <div key={key} style={{ marginBottom: 14 }}>
+      <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
+        {label}
+        {envDefaults && envDefaults[key] != null && (
+          <span style={{ fontWeight: 400, color: '#94a3b8', marginLeft: 6 }}>
+            (env default: {envDefaults[key]})
+          </span>
+        )}
+      </label>
+      <p style={{ margin: '0 0 6px', fontSize: 11, color: '#64748b', lineHeight: 1.45 }}>{help}</p>
+      <input
+        type="number"
+        value={policy[key]}
+        min={opts.min}
+        max={opts.max}
+        step={opts.step ?? 'any'}
+        onChange={(e) => {
+          const v = opts.int ? parseInt(e.target.value, 10) : parseFloat(e.target.value);
+          setPolicy((p) => ({ ...p, [key]: Number.isFinite(v) ? v : p[key] }));
+        }}
+        style={{ width: '100%', maxWidth: 200, padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 13, boxSizing: 'border-box' }}
+      />
+    </div>
+  );
+
+  return (
+    <div style={embedded ? { marginTop: 0, paddingTop: 0, borderTop: 'none' } : { marginTop: 24, borderTop: '1px solid #e2e8f0', paddingTop: 20 }}>
+      <p style={{ margin: '0 0 14px', fontSize: 12, color: '#64748b', lineHeight: 1.55 }}>
+        Tune how raw model output is filtered into BUY / SELL / HOLD, optional chop detection, and how hard the service
+        retries on rate limits. Values here override environment defaults until you reset.
+      </p>
+      {hasOverrides ? (
+        <p style={{ fontSize: 11, color: '#b45309', margin: '0 0 12px', fontWeight: 500 }}>
+          Custom adjustments are active (overriding env).
+        </p>
+      ) : null}
+      {loading ? (
+        <p style={{ fontSize: 13, color: '#64748b' }}>Loading…</p>
+      ) : (
+        <>
+          {row('Minimum confidence (%)', 'BUY/SELL below this becomes HOLD unless strong-trend relaxation applies.', 'minConfidence', { min: 0, max: 100, step: 1 })}
+          {row('Minimum risk : reward', 'Below this ratio, directional signals are downgraded to HOLD.', 'minRiskReward', { min: 0.5, max: 20, step: 0.1 })}
+          {row('Strong trend — EMA gap (%)', 'If EMA9 vs EMA21 separation vs price is at least this, a lower confidence floor may apply.', 'strongTrendMinEmaGapPct', { min: 0, max: 5, step: 0.01 })}
+          {row('Strong trend — relaxed confidence floor (%)', 'Minimum confidence allowed when the strong-trend rule fires (reduces excess HOLD in trends).', 'relaxedConfidenceFloorStrongTrend', { min: 0, max: 100, step: 1 })}
+          {row('SELL near support — min confidence (%)', 'Stricter floor when the checklist marks price near support and the model says SELL.', 'sellNearSupportMinConfidence', { min: 0, max: 100, step: 1 })}
+          {row('Low volatility gate — min ATR %% of price', 'Set to 0 to disable. If ATR(14)/price × 100 is below this, force HOLD (dead tape).', 'minAtrPctOfPrice', { min: 0, max: 10, step: 0.01 })}
+          {row('Rate-limit retries', 'HTTP 429: attempts before returning a placeholder HOLD.', 'rateLimitMaxRetries', { min: 1, max: 20, step: 1, int: true })}
+          {row('Rate-limit retry base delay (sec)', 'First backoff delay; doubles each attempt (capped).', 'rateLimitRetryBaseDelaySec', { min: 1, max: 120, step: 1 })}
+        </>
+      )}
+      {status && (
+        <p style={{ fontSize: 12, margin: '12px 0 0', color: status.type === 'ok' ? '#16a34a' : '#dc2626', fontWeight: 500 }}>
+          {status.type === 'ok' ? '✓ ' : '✗ '}{status.msg}
+        </p>
+      )}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 16 }}>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving || loading}
+          style={{
+            padding: '8px 18px', borderRadius: 6, border: 'none', cursor: saving || loading ? 'not-allowed' : 'pointer',
+            background: saving || loading ? '#94a3b8' : '#4f46e5', color: '#fff', fontWeight: 600, fontSize: 13,
+          }}
+        >
+          {saving ? 'Saving…' : 'Save adjustments'}
+        </button>
+        <button
+          type="button"
+          onClick={handleReset}
+          disabled={saving || loading}
+          style={{
+            padding: '8px 14px', borderRadius: 6, border: '1px solid #e2e8f0', background: '#fff', cursor: saving || loading ? 'not-allowed' : 'pointer',
+            fontSize: 13, color: '#475569',
+          }}
+        >
+          Reset to env defaults
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RiskLimitsSettingsForm({ hideHeading = false }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState(null);
+  const [halted, setHalted] = useState(false);
+  const [maxSig, setMaxSig] = useState('');
+  const [maxLoss, setMaxLoss] = useState('');
+  const [todayDir, setTodayDir] = useState(0);
+  const [todayPnl, setTodayPnl] = useState(0);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    api.getMyRiskSettings()
+      .then((d) => {
+        if (!d) return;
+        setHalted(Boolean(d.tradingHalted));
+        setMaxSig(d.maxSignalsPerDay != null ? String(d.maxSignalsPerDay) : '');
+        setMaxLoss(d.maxDailyLossPct != null ? String(d.maxDailyLossPct) : '');
+        setTodayDir(Number(d.directionalSignalsToday) || 0);
+        setTodayPnl(Number(d.resolvedPnlSumTodayPct) || 0);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function handleSave(e) {
+    e.preventDefault();
+    setSaving(true);
+    setStatus(null);
+    try {
+      const maxSignalsPerDay = maxSig.trim() === '' ? null : parseInt(maxSig, 10);
+      if (maxSignalsPerDay != null && (!Number.isFinite(maxSignalsPerDay) || maxSignalsPerDay < 1)) {
+        setStatus({ type: 'error', msg: 'Max signals per day must be empty (unlimited) or a positive integer.' });
+        return;
+      }
+      let maxDailyLossPct = null;
+      if (maxLoss.trim() !== '') {
+        const v = parseFloat(maxLoss);
+        if (!Number.isFinite(v) || v <= 0) {
+          setStatus({ type: 'error', msg: 'Daily loss cap must be empty (off) or a positive number (%).' });
+          return;
+        }
+        maxDailyLossPct = v;
+      }
+      await api.updateMyRiskSettings({
+        tradingHalted: halted,
+        maxSignalsPerDay,
+        maxDailyLossPct,
+      });
+      setStatus({ type: 'ok', msg: 'Risk settings saved.' });
+      load();
+    } catch (err) {
+      if (err.message === 'SESSION_EXPIRED') {
+        setStatus({ type: 'error', msg: 'Session expired — sign in again.' });
+      } else {
+        setStatus({ type: 'error', msg: err.message });
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const formStyle = hideHeading
+    ? { marginTop: 0, paddingTop: 0, borderTop: 'none' }
+    : { marginTop: 20, paddingTop: 18, borderTop: '1px solid #e2e8f0' };
+
+  return (
+    <form onSubmit={handleSave} style={formStyle}>
+      {!hideHeading ? (
+        <h3 style={{ margin: '0 0 8px', fontSize: 14, fontWeight: 600, color: '#1e293b' }}>Risk limits</h3>
+      ) : null}
+      <p style={{ margin: '0 0 14px', fontSize: 12, color: '#64748b', lineHeight: 1.5 }}>
+        These guardrails apply to <strong>signals</strong> this app shows (not your broker). Counts are <strong>stored prediction rows</strong> for the IST day, not broker fills. Directional calls can be forced to HOLD when a limit trips.
+      </p>
+      {loading ? <p style={{ fontSize: 13, color: '#64748b' }}>Loading…</p> : (
+        <>
+          <p style={{ fontSize: 11, color: '#64748b', margin: '0 0 12px' }}>
+            Today (IST): <strong>{todayDir}</strong> directional signals stored · resolved P&amp;L sum:{' '}
+            <strong>{todayPnl === 0 ? '0' : `${todayPnl >= 0 ? '+' : ''}${todayPnl.toFixed(2)}`}%</strong>
+          </p>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, fontSize: 13, cursor: 'pointer' }}>
+            <input type="checkbox" checked={halted} onChange={(e) => setHalted(e.target.checked)} />
+            <span>Halt trading (kill switch) — only HOLD-style output</span>
+          </label>
+          <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
+            Max directional signals per day
+          </label>
+          <input
+            type="text"
+            inputMode="numeric"
+            placeholder="Unlimited if empty"
+            value={maxSig}
+            onChange={(e) => setMaxSig(e.target.value.replace(/[^\d]/g, ''))}
+            style={{ width: '100%', maxWidth: 220, padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5e1', marginBottom: 12, boxSizing: 'border-box' }}
+          />
+          <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
+            Daily loss cap (% of summed resolved P&amp;L)
+          </label>
+          <input
+            type="text"
+            inputMode="decimal"
+            placeholder="Off if empty — e.g. 2.5"
+            value={maxLoss}
+            onChange={(e) => setMaxLoss(e.target.value.replace(/[^\d.]/g, ''))}
+            style={{ width: '100%', maxWidth: 220, padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5e1', marginBottom: 12, boxSizing: 'border-box' }}
+          />
+          <p style={{ fontSize: 11, color: '#94a3b8', margin: '0 0 12px', lineHeight: 1.45 }}>
+            When the sum of <em>resolved</em> prediction P&amp;L% for today falls to −cap or below, new BUY/SELL/BULLISH/BEARISH calls are blocked until the next session day.
+          </p>
+        </>
+      )}
+      {status && (
+        <p style={{ fontSize: 12, margin: '8px 0 0', color: status.type === 'ok' ? '#16a34a' : '#dc2626', fontWeight: 500 }}>
+          {status.type === 'ok' ? '✓ ' : '✗ '}{status.msg}
+        </p>
+      )}
+      <button
+        type="submit"
+        disabled={saving || loading}
+        style={{
+          marginTop: 8,
+          padding: '8px 16px',
+          borderRadius: 6,
+          border: 'none',
+          cursor: saving || loading ? 'not-allowed' : 'pointer',
+          background: saving || loading ? '#94a3b8' : '#0f766e',
+          color: '#fff',
+          fontWeight: 600,
+          fontSize: 13,
+        }}
+      >
+        {saving ? 'Saving…' : 'Save risk limits'}
+      </button>
+    </form>
+  );
+}
+
 // ── AI Management Modal ──
 function AiManagementModal({ onClose }) {
   const [activeTab, setActiveTab] = useState('prompt');
@@ -2679,8 +3178,8 @@ function AiManagementModal({ onClose }) {
         </button>
         <h2 id="ai-mgmt-dialog-title" style={{ marginBottom: 16 }}>AI management</h2>
 
-        <div style={{ display: 'flex', gap: 6, marginBottom: 20, borderBottom: '1px solid #e2e8f0', paddingBottom: 12 }}>
-          {[{ key: 'prompt', label: 'Prompt' }, { key: 'model', label: 'AI Model' }].map(({ key, label }) => (
+        <div style={{ display: 'flex', gap: 6, marginBottom: 20, borderBottom: '1px solid #e2e8f0', paddingBottom: 12, flexWrap: 'wrap' }}>
+          {[{ key: 'prompt', label: 'Prompt' }, { key: 'adjustments', label: 'Adjustments' }, { key: 'model', label: 'AI Model' }].map(({ key, label }) => (
             <button
               key={key}
               type="button"
@@ -2702,7 +3201,7 @@ function AiManagementModal({ onClose }) {
           ))}
         </div>
 
-        {activeTab === 'prompt' ? <AdminPromptSection embedded /> : <AdminAiModelSection />}
+        {activeTab === 'prompt' ? <AdminPromptSection embedded /> : activeTab === 'adjustments' ? <AdminAdjustmentsSection embedded /> : <AdminAiModelSection />}
       </div>
     </div>
   );
@@ -2721,6 +3220,7 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
   const liveTickRef = useRef(null);
   const [instrumentsOpen, setInstrumentsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [riskLimitsOpen, setRiskLimitsOpen] = useState(false);
   const [userMgmtOpen, setUserMgmtOpen] = useState(false);
   const [aiPromptOpen, setAiPromptOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -2898,11 +3398,11 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
 
 
   const aiText = (() => {
+    const risk = (prediction?.riskLimitNotice || '').trim();
     const q = (prediction?.aiQuotaNotice || '').trim();
     const r = (prediction?.predictionReason || '').trim();
-    if (!q && !r) return '';
-    if (q && r) return `${q}\n\n${r}`;
-    return q || r;
+    const parts = [risk, q, r].filter(Boolean);
+    return parts.join('\n\n');
   })();
 
   const lastPredictionText = (() => {
@@ -3223,6 +3723,8 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
           </div>
         )}
 
+        <NewsSentimentCard />
+
         <footer className="dashboard-page-footer">
           Bank Nifty spot · Mon–Fri 9:15 AM–3:30 PM IST
           {isLive ? ' · Live AI signal' : ' · REST fallback every 5 min'}
@@ -3240,11 +3742,13 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
           className="dashboard-settings-backdrop"
           onClick={() => {
             setAiPromptOpen(false);
+            setRiskLimitsOpen(false);
             setSettingsOpen(false);
           }}
           onKeyDown={(e) => {
             if (e.key === 'Escape') {
               setAiPromptOpen(false);
+              setRiskLimitsOpen(false);
               setSettingsOpen(false);
             }
           }}
@@ -3262,6 +3766,7 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
               className="dashboard-settings-panel__close"
               onClick={() => {
                 setAiPromptOpen(false);
+                setRiskLimitsOpen(false);
                 setSettingsOpen(false);
               }}
               aria-label="Close settings"
@@ -3285,6 +3790,46 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
                 </span>
               </button>
             ) : null}
+            <button
+              type="button"
+              className="dashboard-settings-ai-btn dashboard-settings-risk-btn"
+              onClick={() => setRiskLimitsOpen(true)}
+            >
+              <span className="dashboard-settings-ai-btn__inner">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                </svg>
+                <span>Risk limits</span>
+              </span>
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {riskLimitsOpen ? (
+        <div
+          className="dashboard-settings-backdrop dashboard-settings-backdrop--nested"
+          onClick={() => setRiskLimitsOpen(false)}
+          onKeyDown={(e) => e.key === 'Escape' && setRiskLimitsOpen(false)}
+          role="presentation"
+        >
+          <div
+            className="dashboard-settings-panel dashboard-settings-panel--prompt"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="risk-limits-dialog-title"
+          >
+            <button
+              type="button"
+              className="dashboard-settings-panel__close"
+              onClick={() => setRiskLimitsOpen(false)}
+              aria-label="Close risk limits"
+            >
+              ×
+            </button>
+            <h2 id="risk-limits-dialog-title">Risk limits</h2>
+            <RiskLimitsSettingsForm hideHeading />
           </div>
         </div>
       ) : null}
