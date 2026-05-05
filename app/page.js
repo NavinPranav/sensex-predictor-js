@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
+import { useState, useEffect, useCallback, useRef, useLayoutEffect, useMemo } from 'react';
 import { useStomp } from './hooks/useStomp';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
@@ -197,6 +197,22 @@ const api = {
       headers: { Authorization: 'Bearer ' + this.token },
     });
     if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || 'Failed to activate model'); }
+    return res.json();
+  },
+  async getChecklistWeight() {
+    const res = await fetch(`${API}/api/admin/checklist-weight`, {
+      headers: { Authorization: 'Bearer ' + this.token },
+    });
+    if (!res.ok) return { weight: 40, remaining: 60 };
+    return res.json();
+  },
+  async setChecklistWeight(weight) {
+    const res = await fetch(`${API}/api/admin/checklist-weight`, {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer ' + this.token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ weight }),
+    });
+    if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || 'Failed to save weight'); }
     return res.json();
   },
   async listAdminUsers(page, size) {
@@ -1116,6 +1132,9 @@ function PredictionHistoryDialog({ open, onClose, isAdmin }) {
   const [analysing, setAnalysing] = useState(false);
   const [analysis, setAnalysis] = useState(null);
   const [analysisError, setAnalysisError] = useState(null);
+  /** Prediction row ids the user chose for AI analysis (can span multiple pages). */
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const selectAllPageRef = useRef(null);
   const PAGE_SIZE = 20;
 
   /** Admins load platform-wide history; everyone else only their rows (matches backend). */
@@ -1142,6 +1161,7 @@ function PredictionHistoryDialog({ open, onClose, isAdmin }) {
       setAnalysis(null);
       setAnalysisError(null);
       setAnalysing(false);
+      setSelectedIds(new Set());
     }
   }, [open]);
 
@@ -1220,6 +1240,7 @@ function PredictionHistoryDialog({ open, onClose, isAdmin }) {
     setPage(0);
     setAnalysis(null);
     setAnalysisError(null);
+    setSelectedIds(new Set());
   }, []);
 
   const applyHorizonFilter = useCallback(() => {
@@ -1228,6 +1249,7 @@ function PredictionHistoryDialog({ open, onClose, isAdmin }) {
     setPage(0);
     setAnalysis(null);
     setAnalysisError(null);
+    setSelectedIds(new Set());
   }, [horizonDraft]);
 
   const applySignalFilter = useCallback(() => {
@@ -1236,10 +1258,34 @@ function PredictionHistoryDialog({ open, onClose, isAdmin }) {
     setPage(0);
     setAnalysis(null);
     setAnalysisError(null);
+    setSelectedIds(new Set());
   }, [signalDraft]);
 
+  const toggleRowSelected = useCallback((id) => {
+    if (id == null) return;
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAllOnPage = useCallback(() => {
+    setSelectedIds((prev) => {
+      const preds = data?.predictions || [];
+      const pageIds = preds.map((p) => p.id).filter((x) => x != null);
+      if (pageIds.length === 0) return prev;
+      const next = new Set(prev);
+      const allOnPageSelected = pageIds.every((id) => next.has(id));
+      if (allOnPageSelected) pageIds.forEach((id) => next.delete(id));
+      else pageIds.forEach((id) => next.add(id));
+      return next;
+    });
+  }, [data?.predictions]);
+
   const handleAnalyse = useCallback(async () => {
-    const ids = (data?.predictions || []).map(p => p.id).filter(Boolean);
+    const ids = [...selectedIds];
     if (ids.length === 0) return;
     setAnalysing(true);
     setAnalysis(null);
@@ -1256,7 +1302,19 @@ function PredictionHistoryDialog({ open, onClose, isAdmin }) {
     } finally {
       setAnalysing(false);
     }
-  }, [data]);
+  }, [selectedIds]);
+
+  const pageIdList = useMemo(
+    () => (data?.predictions || []).map((p) => p.id).filter((id) => id != null),
+    [data?.predictions],
+  );
+  const allPageSelected = pageIdList.length > 0 && pageIdList.every((id) => selectedIds.has(id));
+  const somePageSelected = pageIdList.some((id) => selectedIds.has(id));
+
+  useEffect(() => {
+    const el = selectAllPageRef.current;
+    if (el) el.indeterminate = somePageSelected && !allPageSelected;
+  }, [somePageSelected, allPageSelected]);
 
   /** Dialog opens only after the API returns (success or error). While loading, the table stays visible with a sweep indicator. */
   const analysisDialogVisible = analysis != null || analysisError != null;
@@ -1433,6 +1491,15 @@ function PredictionHistoryDialog({ open, onClose, isAdmin }) {
             <table className="prediction-history-shell__table">
               <thead>
                 <tr className="prediction-history-shell__thead-row">
+                  <th className="prediction-history-shell__th prediction-history-shell__th--select" scope="col">
+                    <input
+                      ref={selectAllPageRef}
+                      type="checkbox"
+                      checked={allPageSelected}
+                      onChange={toggleSelectAllOnPage}
+                      aria-label="Select all predictions on this page"
+                    />
+                  </th>
                   <th
                     className="prediction-history-shell__th prediction-history-shell__th--sortable"
                     aria-sort={timeSort === 'desc' ? 'descending' : 'ascending'}
@@ -1472,8 +1539,21 @@ function PredictionHistoryDialog({ open, onClose, isAdmin }) {
                   const pnl = p.actualPnlPct != null ? Number(p.actualPnlPct) : null;
                   const showPendingIcon = !p.outcomeStatus || p.outcomeStatus === 'PENDING';
 
+                  const rowId = p.id;
+                  const rowChecked = rowId != null && selectedIds.has(rowId);
+
                   return (
                     <tr key={p.id ?? i} style={{ borderBottom: '1px solid #f1f5f9', background: i % 2 === 0 ? '#fff' : '#fafafa' }}>
+                      <td className="prediction-history-shell__td--select">
+                        {rowId != null ? (
+                          <input
+                            type="checkbox"
+                            checked={rowChecked}
+                            onChange={() => toggleRowSelected(rowId)}
+                            aria-label={`Select prediction ${rowId}`}
+                          />
+                        ) : null}
+                      </td>
                       <td style={{ padding: '8px 10px', color: '#475569', whiteSpace: 'nowrap' }}>{timeStr}</td>
                       <td style={{ padding: '8px 10px', fontWeight: 600, color: '#0f172a' }}>{p.horizon}</td>
                       <td style={{ padding: '8px 10px', fontWeight: 700, color: dirColor }}>{dir}</td>
@@ -1550,8 +1630,8 @@ function PredictionHistoryDialog({ open, onClose, isAdmin }) {
             type="button"
             className="prediction-history-analyse-btn"
             onClick={handleAnalyse}
-            disabled={analysing}
-            aria-label="Analyse current page predictions with AI"
+            disabled={analysing || selectedIds.size === 0}
+            aria-label="Analyse selected predictions with AI"
           >
             {analysing ? (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -2390,6 +2470,9 @@ function AdminPromptSection({ embedded }) {
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState(null); // { type: 'ok'|'error', msg }
   const [promptHistoryOpen, setPromptHistoryOpen] = useState(false);
+  const [checklistWeight, setChecklistWeight] = useState(40);
+  const [weightSaving, setWeightSaving] = useState(false);
+  const [weightStatus, setWeightStatus] = useState(null);
 
   useEffect(() => {
     api.getActivePrompt()
@@ -2403,7 +2486,23 @@ function AdminPromptSection({ embedded }) {
         }
       })
       .catch(() => {});
+    api.getChecklistWeight()
+      .then((d) => { if (d && d.weight != null) setChecklistWeight(d.weight); })
+      .catch(() => {});
   }, []);
+
+  async function handleWeightSave() {
+    setWeightSaving(true);
+    setWeightStatus(null);
+    try {
+      await api.setChecklistWeight(checklistWeight);
+      setWeightStatus({ type: 'ok', msg: `Checklist weight set to ${checklistWeight}%.` });
+    } catch (e) {
+      setWeightStatus({ type: 'error', msg: e.message });
+    } finally {
+      setWeightSaving(false);
+    }
+  }
 
   async function handleSave() {
     if (!label.trim()) { setStatus({ type: 'error', msg: 'Label is required.' }); return; }
@@ -2439,7 +2538,54 @@ function AdminPromptSection({ embedded }) {
         <code style={{ display: 'block', color: '#0f172a' }}>
           <strong>{'{target_minutes}'}</strong> — number of minutes ahead for this horizon (e.g. 5 for 5M, 15 for 15M, 30 for 30M)
         </code>
+        <code style={{ display: 'block', color: '#0f172a' }}>
+          <strong>{'{checklist_weight}'}</strong> — checklist signal weight % (set below, appended automatically)
+        </code>
+        <code style={{ display: 'block', color: '#0f172a' }}>
+          <strong>{'{remaining_weight}'}</strong> — remaining % for AI&apos;s own OHLCV analysis (= 100 − checklist_weight)
+        </code>
       </div>
+
+      <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, padding: '12px 14px', marginBottom: 16 }}>
+        <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#0369a1', marginBottom: 6 }}>
+          Checklist Signal Weight — {checklistWeight}%
+          <span style={{ fontWeight: 400, color: '#64748b', marginLeft: 6 }}>
+            (AI uses own analysis for remaining {100 - checklistWeight}%)
+          </span>
+        </label>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={5}
+          value={checklistWeight}
+          onChange={e => setChecklistWeight(Number(e.target.value))}
+          style={{ width: '100%', accentColor: '#0369a1', cursor: 'pointer' }}
+        />
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#94a3b8', marginTop: 2 }}>
+          <span>0% (AI only)</span>
+          <span>50% balanced</span>
+          <span>100% (checklist only)</span>
+        </div>
+        {weightStatus && (
+          <p style={{ fontSize: 11, margin: '6px 0 0', color: weightStatus.type === 'ok' ? '#16a34a' : '#dc2626', fontWeight: 500 }}>
+            {weightStatus.type === 'ok' ? '✓ ' : '✗ '}{weightStatus.msg}
+          </p>
+        )}
+        <button
+          type="button"
+          onClick={handleWeightSave}
+          disabled={weightSaving}
+          style={{
+            marginTop: 8, padding: '5px 14px', borderRadius: 6, border: 'none',
+            cursor: weightSaving ? 'not-allowed' : 'pointer',
+            background: weightSaving ? '#94a3b8' : '#0369a1', color: '#fff', fontWeight: 600, fontSize: 12,
+          }}
+        >
+          {weightSaving ? 'Saving…' : 'Save weight'}
+        </button>
+      </div>
+
       <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
         Label <span style={{ fontWeight: 400, color: '#94a3b8' }}>(short name for this version)</span>
       </label>
@@ -2579,6 +2725,7 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
   const [aiPromptOpen, setAiPromptOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [checklistOpen, setChecklistOpen] = useState(false);
   const [activeInstrumentId, setActiveInstrumentId] = useState('BANKNIFTY');
   const instrumentsRef = useRef(null);
   const sidebarRef = useRef(null);
@@ -2876,6 +3023,25 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
                 </button>
               </li>
 
+              <li className="dashboard-sidebar-nav__item">
+                <button
+                  type="button"
+                  className={'dashboard-sidebar-nav__link' + (checklistOpen ? ' dashboard-sidebar-nav__link--active' : '')}
+                  onClick={() => { setChecklistOpen(true); setSidebarOpen(false); }}
+                  aria-haspopup="dialog"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <line x1="8" y1="6" x2="21" y2="6" />
+                    <line x1="8" y1="12" x2="21" y2="12" />
+                    <line x1="8" y1="18" x2="21" y2="18" />
+                    <polyline points="3 6 4 7 6 5" />
+                    <polyline points="3 12 4 13 6 11" />
+                    <polyline points="3 18 4 19 6 17" />
+                  </svg>
+                  Trade Checklist
+                </button>
+              </li>
+
               {user?.role === 'ADMIN' ? (
                 <li className="dashboard-sidebar-nav__item">
                   <button
@@ -3147,6 +3313,441 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
       {aiPromptOpen && user?.role === 'ADMIN' ? (
         <AiManagementModal onClose={() => setAiPromptOpen(false)} />
       ) : null}
+
+      <ProChecklistPage
+        open={checklistOpen}
+        onClose={() => setChecklistOpen(false)}
+        chartCandles={chartCandles}
+      />
+    </div>
+  );
+}
+
+// ── Pro Checklist helpers ──
+function _calcEMA(closes, period) {
+  if (closes.length < period) return null;
+  const k = 2 / (period + 1);
+  let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < closes.length; i++) {
+    ema = closes[i] * k + ema * (1 - k);
+  }
+  return ema;
+}
+
+function computeStep1Trend(chartCandles) {
+  const closes = (chartCandles || [])
+    .map(c => Number(c.close))
+    .filter(v => !isNaN(v) && v > 0);
+  if (closes.length < 50) {
+    return { signal: 'INSUFFICIENT_DATA', ema20: null, ema50: null, tradeType: 'NONE', diffPct: null };
+  }
+  const ema20 = _calcEMA(closes, 20);
+  const ema50 = _calcEMA(closes, 50);
+  if (ema20 === null || ema50 === null) {
+    return { signal: 'INSUFFICIENT_DATA', ema20: null, ema50: null, tradeType: 'NONE', diffPct: null };
+  }
+  const diffPct = Math.abs(ema20 - ema50) / ema50;
+  let signal, tradeType;
+  if (diffPct <= 0.001) { signal = 'MIXED';   tradeType = 'NONE'; }
+  else if (ema20 > ema50) { signal = 'BULLISH'; tradeType = 'CE'; }
+  else                    { signal = 'BEARISH'; tradeType = 'PE'; }
+  return {
+    signal, tradeType,
+    ema20: Math.round(ema20 * 100) / 100,
+    ema50: Math.round(ema50 * 100) / 100,
+    diffPct: (diffPct * 100).toFixed(3),
+  };
+}
+
+function computeStep2VWAP(chartCandles) {
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const todayCandles = (chartCandles || []).filter(c => {
+    const d = new Date(Number(c.time) * 1000).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    return d === todayStr;
+  });
+  if (todayCandles.length === 0) {
+    return { signal: 'INSUFFICIENT_DATA', vwap: null, currentPrice: null, diffPct: null };
+  }
+  let sumTPV = 0, sumV = 0;
+  for (const c of todayCandles) {
+    const tp = (Number(c.high) + Number(c.low) + Number(c.close)) / 3;
+    const vol = Number(c.volume) || 1;
+    sumTPV += tp * vol;
+    sumV += vol;
+  }
+  const vwap = sumTPV / sumV;
+  const currentPrice = Number(todayCandles[todayCandles.length - 1].close);
+  const diffPct = Math.abs(currentPrice - vwap) / vwap;
+  let signal;
+  if (diffPct <= 0.0005)      signal = 'AVOID';
+  else if (currentPrice > vwap) signal = 'BULLISH';
+  else                          signal = 'BEARISH';
+  return {
+    signal,
+    vwap: Math.round(vwap * 100) / 100,
+    currentPrice,
+    diffPct: (diffPct * 100).toFixed(3),
+  };
+}
+
+function _calcRSI(closes, period) {
+  if (closes.length <= period) return null;
+  let gains = 0, losses = 0;
+  for (let i = 1; i <= period; i++) {
+    const d = closes[i] - closes[i - 1];
+    if (d > 0) gains += d; else losses -= d;
+  }
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+  for (let i = period + 1; i < closes.length; i++) {
+    const d = closes[i] - closes[i - 1];
+    avgGain = (avgGain * (period - 1) + (d > 0 ? d : 0)) / period;
+    avgLoss = (avgLoss * (period - 1) + (d < 0 ? -d : 0)) / period;
+  }
+  if (avgLoss === 0) return 100;
+  return 100 - 100 / (1 + avgGain / avgLoss);
+}
+
+function computeStep3RSI(chartCandles) {
+  const closes = (chartCandles || [])
+    .map(c => Number(c.close))
+    .filter(v => !isNaN(v) && v > 0);
+  if (closes.length <= 14) {
+    return { signal: 'INSUFFICIENT_DATA', rsi: null };
+  }
+  const rsi = _calcRSI(closes, 14);
+  if (rsi === null) return { signal: 'INSUFFICIENT_DATA', rsi: null };
+  let signal;
+  if (rsi > 55)      signal = 'BUY';
+  else if (rsi < 45) signal = 'SELL';
+  else               signal = 'SIDEWAYS';
+  return { signal, rsi: Math.round(rsi * 100) / 100 };
+}
+
+function computeStep5Levels(chartCandles) {
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const dateMap = {};
+  for (const c of (chartCandles || [])) {
+    const d = new Date(Number(c.time) * 1000).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    if (!dateMap[d]) dateMap[d] = [];
+    dateMap[d].push(c);
+  }
+  const sortedDates = Object.keys(dateMap).sort();
+  const todayIdx = sortedDates.indexOf(todayStr);
+  if (todayIdx < 1) return { signal: 'INSUFFICIENT_DATA', pivot: null, r1: null, r2: null, s1: null, s2: null, currentPrice: null };
+  const prev = dateMap[sortedDates[todayIdx - 1]];
+  const H = Math.max(...prev.map(c => Number(c.high)));
+  const L = Math.min(...prev.map(c => Number(c.low)));
+  const C = Number(prev[prev.length - 1].close);
+  const pivot = (H + L + C) / 3;
+  const r1 = 2 * pivot - L;
+  const s1 = 2 * pivot - H;
+  const r2 = pivot + (H - L);
+  const s2 = pivot - (H - L);
+  const todayCandles = dateMap[todayStr] || [];
+  if (!todayCandles.length) return { signal: 'INSUFFICIENT_DATA', pivot: Math.round(pivot*100)/100, r1: Math.round(r1*100)/100, r2: Math.round(r2*100)/100, s1: Math.round(s1*100)/100, s2: Math.round(s2*100)/100, currentPrice: null };
+  const currentPrice = Number(todayCandles[todayCandles.length - 1].close);
+  const PROX = 0.003;
+  const aboveR1 = currentPrice > r1 * (1 + PROX);
+  const belowS1 = currentPrice < s1 * (1 - PROX);
+  const nearR = Math.abs(currentPrice - r1) / r1 <= PROX || Math.abs(currentPrice - r2) / r2 <= PROX;
+  const nearS = Math.abs(currentPrice - s1) / s1 <= PROX || Math.abs(currentPrice - s2) / s2 <= PROX;
+  const signal = aboveR1 ? 'BREAKOUT_UP' : belowS1 ? 'BREAKOUT_DOWN' : nearR ? 'NEAR_RESISTANCE' : nearS ? 'NEAR_SUPPORT' : 'NO_LEVEL';
+  return { signal, pivot: Math.round(pivot*100)/100, r1: Math.round(r1*100)/100, r2: Math.round(r2*100)/100, s1: Math.round(s1*100)/100, s2: Math.round(s2*100)/100, currentPrice };
+}
+
+function computeStep6Candle(chartCandles) {
+  const candles = (chartCandles || []).filter(c => Number(c.high) > 0 && !isNaN(Number(c.close)));
+  if (candles.length < 2) return { signal: 'INSUFFICIENT_DATA', bodyRatio: null, isBullish: null, open: null, close: null, high: null, low: null };
+  const c = candles[candles.length - 2];
+  const o = Number(c.open), cl = Number(c.close), h = Number(c.high), l = Number(c.low);
+  const range = h - l;
+  if (range === 0) return { signal: 'WEAK_CANDLE', bodyRatio: 0, isBullish: null, open: o, close: cl, high: h, low: l };
+  const bodyRatio = Math.abs(cl - o) / range;
+  const isBullish = cl > o;
+  const signal = bodyRatio > 0.6 ? (isBullish ? 'BULLISH_CANDLE' : 'BEARISH_CANDLE') : 'WEAK_CANDLE';
+  return { signal, bodyRatio: Math.round(bodyRatio * 1000) / 1000, isBullish, open: Math.round(o*100)/100, close: Math.round(cl*100)/100, high: Math.round(h*100)/100, low: Math.round(l*100)/100 };
+}
+
+function computeStep7Strike(chartCandles, trendResult, levelResult, confidence) {
+  const candles = (chartCandles || []).filter(c => Number(c.close) > 0);
+  if (!candles.length) return { signal: 'INSUFFICIENT_DATA', strike: null, strikeType: null, atm: null, currentPrice: null };
+  const currentPrice = Number(candles[candles.length - 1].close);
+  const INTERVAL = 100;
+  const atm = Math.round(currentPrice / INTERVAL) * INTERVAL;
+  const isBullish = trendResult.signal === 'BULLISH';
+  const isBreakout = levelResult.signal === 'BREAKOUT_UP' || levelResult.signal === 'BREAKOUT_DOWN';
+  let strikeType;
+  if (isBreakout)          strikeType = 'OTM';
+  else if (confidence >= 75) strikeType = 'ATM';
+  else                       strikeType = 'ITM';
+  const strike = strikeType === 'OTM'
+    ? (isBullish ? atm + INTERVAL : atm - INTERVAL)
+    : strikeType === 'ATM'
+    ? atm
+    : (isBullish ? atm - INTERVAL : atm + INTERVAL);
+  return { signal: strikeType, strikeType, strike, atm, currentPrice };
+}
+
+function computeStep8Risk() {
+  const slPct = 12, tgtPct = 25;
+  return { signal: 'VALID', slPct, tgtPct, riskReward: parseFloat((tgtPct / slPct).toFixed(2)), maxTrades: 2 };
+}
+
+function computeStep9NoTrade(chartCandles, vwapResult, rsiResult, levelResult, candleResult) {
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const dateVolMap = {};
+  for (const c of (chartCandles || [])) {
+    const d = new Date(Number(c.time) * 1000).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    dateVolMap[d] = (dateVolMap[d] || 0) + (Number(c.volume) || 0);
+  }
+  const pastDates = Object.keys(dateVolMap).sort().filter(d => d < todayStr).slice(-20);
+  const avgVol = pastDates.length > 0 ? pastDates.reduce((s, d) => s + dateVolMap[d], 0) / pastDates.length : 0;
+  const lowVolume = avgVol > 0 && (dateVolMap[todayStr] || 0) < avgVol * 0.8;
+
+  const bullishCount = [vwapResult.signal === 'BULLISH', rsiResult.signal === 'BUY', levelResult.signal === 'NEAR_SUPPORT' || levelResult.signal === 'BREAKOUT_UP', candleResult.signal === 'BULLISH_CANDLE'].filter(Boolean).length;
+  const bearishCount = [vwapResult.signal === 'BEARISH', rsiResult.signal === 'SELL', levelResult.signal === 'NEAR_RESISTANCE' || levelResult.signal === 'BREAKOUT_DOWN', candleResult.signal === 'BEARISH_CANDLE'].filter(Boolean).length;
+  const conflicting = Math.min(bullishCount, bearishCount) >= 2;
+
+  const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const mins = ist.getHours() * 60 + ist.getMinutes();
+  const tooEarly = mins >= 555 && mins < 570;
+  const tooLate  = mins >= 915 && mins <= 930;
+
+  const conditions = [
+    { reason: 'Price hugging VWAP (within 0.05%)',                                   triggered: vwapResult.signal === 'AVOID' },
+    { reason: 'RSI in neutral zone 45–55 (sideways market)',                          triggered: rsiResult.signal === 'SIDEWAYS' },
+    { reason: "Today's volume below 80% of 20-day average",                           triggered: lowVolume },
+    { reason: `${Math.min(bullishCount, bearishCount)} of 4 signals conflicting`,     triggered: conflicting },
+    { reason: 'Trade tracking not active — 0 losing trades assumed',                  triggered: false },
+    { reason: tooEarly ? 'Market just opened (9:15–9:30 AM IST)' : tooLate ? 'Market about to close (3:15–3:30 PM IST)' : 'Market in normal trading window', triggered: tooEarly || tooLate },
+  ];
+  return { signal: conditions.some(c => c.triggered) ? 'NO_TRADE' : 'GO', conditions };
+}
+
+
+function _stepColors(signal) {
+  const green  = { color: '#16a34a', bg: '#dcfce7' };
+  const red    = { color: '#dc2626', bg: '#fee2e2' };
+  const amber  = { color: '#b45309', bg: '#fef3c7' };
+  const grey   = { color: '#64748b', bg: '#f1f5f9' };
+  const blue   = { color: '#2563eb', bg: '#dbeafe' };
+  const purple = { color: '#7c3aed', bg: '#ede9fe' };
+  switch (signal) {
+    case 'BULLISH': case 'BUY': case 'NEAR_SUPPORT': case 'BREAKOUT_UP':
+    case 'BULLISH_CANDLE': case 'GO': case 'VALID': return green;
+    case 'BEARISH': case 'SELL': case 'NEAR_RESISTANCE': case 'BREAKOUT_DOWN':
+    case 'BEARISH_CANDLE': case 'NO_TRADE': case 'INVALID': return red;
+    case 'MIXED': case 'AVOID': case 'SIDEWAYS': case 'NO_LEVEL': case 'WEAK_CANDLE': return amber;
+    case 'INSUFFICIENT_DATA': return grey;
+    case 'ATM': return green;
+    case 'ITM': return blue;
+    case 'OTM': return purple;
+    default: return amber;
+  }
+}
+
+function ProChecklistPage({ open, onClose, chartCandles }) {
+  const trend   = useMemo(() => computeStep1Trend(chartCandles),  [chartCandles]);
+  const vwap    = useMemo(() => computeStep2VWAP(chartCandles),   [chartCandles]);
+  const rsi     = useMemo(() => computeStep3RSI(chartCandles),    [chartCandles]);
+  const levels  = useMemo(() => computeStep5Levels(chartCandles), [chartCandles]);
+  const candle  = useMemo(() => computeStep6Candle(chartCandles), [chartCandles]);
+
+  const confidence = useMemo(() => {
+    const b = [vwap.signal === 'BULLISH', rsi.signal === 'BUY', levels.signal === 'NEAR_SUPPORT' || levels.signal === 'BREAKOUT_UP', candle.signal === 'BULLISH_CANDLE'].filter(Boolean).length;
+    const s = [vwap.signal === 'BEARISH', rsi.signal === 'SELL', levels.signal === 'NEAR_RESISTANCE' || levels.signal === 'BREAKOUT_DOWN', candle.signal === 'BEARISH_CANDLE'].filter(Boolean).length;
+    return (Math.max(b, s) / 4) * 100;
+  }, [vwap, rsi, levels, candle]);
+
+  const strike  = useMemo(() => computeStep7Strike(chartCandles, trend, levels, confidence), [chartCandles, trend, levels, confidence]);
+  const risk    = useMemo(() => computeStep8Risk(), []);
+  const noTrade = useMemo(() => computeStep9NoTrade(chartCandles, vwap, rsi, levels, candle), [chartCandles, vwap, rsi, levels, candle]);
+
+  if (!open) return null;
+
+  const sc = (sig) => _stepColors(sig);
+
+  return (
+    <div className="checklist-overlay" role="dialog" aria-modal="true" aria-labelledby="checklist-title">
+      <div className="checklist-panel" onClick={e => e.stopPropagation()}>
+
+        <div className="checklist-panel__header">
+          <div>
+            <div className="checklist-panel__eyebrow">Rule-Based Signal Engine · 5-min candles</div>
+            <h2 id="checklist-title" className="checklist-panel__title">Bank Nifty Pro Trading Checklist</h2>
+          </div>
+          <button type="button" className="checklist-panel__close" onClick={onClose} aria-label="Close checklist">×</button>
+        </div>
+
+        <div className="checklist-progress-bar">
+          <div className="checklist-progress-bar__fill" style={{ width: '100%' }} />
+        </div>
+        <p className="checklist-meta">All 8 steps active · runs on 5-min candles</p>
+
+        <div className="checklist-panel__body">
+
+          {/* ── Step 1: TREND ── */}
+          <div className="checklist-step checklist-step--active">
+            <div className="checklist-step__header">
+              <span className="checklist-step__number">01</span>
+              <span className="checklist-step__name">TREND <span className="checklist-step__subtitle">Direction Filter</span></span>
+              <span className="checklist-step__badge" style={{ color: sc(trend.signal).color, background: sc(trend.signal).bg }}>{trend.signal}</span>
+            </div>
+            <p className="checklist-step__desc">EMA 20 vs EMA 50 on 5-min candles. EMA 20 &gt; EMA 50 → BULLISH (CE). EMA 20 &lt; EMA 50 → BEARISH (PE). Within 0.1% → MIXED.</p>
+            {trend.signal === 'INSUFFICIENT_DATA' ? <div className="checklist-step__warning">Need at least 50 candles.</div> : (
+              <div className="checklist-step__metrics">
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">EMA 20</span><span className="checklist-step__metric-value">{trend.ema20?.toLocaleString('en-IN')}</span></div>
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">EMA 50</span><span className="checklist-step__metric-value">{trend.ema50?.toLocaleString('en-IN')}</span></div>
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">Gap</span><span className="checklist-step__metric-value">{trend.diffPct}%</span></div>
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">Trade Side</span><span className="checklist-step__metric-value checklist-step__metric-value--highlight" style={{ color: sc(trend.signal).color }}>{trend.tradeType === 'NONE' ? 'NO TRADE' : trend.tradeType}</span></div>
+              </div>
+            )}
+          </div>
+
+          {/* ── Step 2: VWAP ── */}
+          <div className="checklist-step checklist-step--active">
+            <div className="checklist-step__header">
+              <span className="checklist-step__number">02</span>
+              <span className="checklist-step__name">VWAP <span className="checklist-step__subtitle">Intraday Control</span></span>
+              <span className="checklist-step__badge" style={{ color: sc(vwap.signal).color, background: sc(vwap.signal).bg }}>{vwap.signal}</span>
+            </div>
+            <p className="checklist-step__desc">Price vs VWAP from today&apos;s intraday bars. &gt;VWAP → BULLISH. &lt;VWAP → BEARISH. Within 0.05% → AVOID.</p>
+            {vwap.signal === 'INSUFFICIENT_DATA' ? <div className="checklist-step__warning">No intraday candles for today.</div> : (
+              <div className="checklist-step__metrics">
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">VWAP</span><span className="checklist-step__metric-value">{vwap.vwap?.toLocaleString('en-IN')}</span></div>
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">Price</span><span className="checklist-step__metric-value">{vwap.currentPrice?.toLocaleString('en-IN')}</span></div>
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">Gap</span><span className="checklist-step__metric-value">{vwap.diffPct}%</span></div>
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">Signal</span><span className="checklist-step__metric-value checklist-step__metric-value--highlight" style={{ color: sc(vwap.signal).color }}>{vwap.signal}</span></div>
+              </div>
+            )}
+          </div>
+
+          {/* ── Step 3: MOMENTUM ── */}
+          <div className="checklist-step checklist-step--active">
+            <div className="checklist-step__header">
+              <span className="checklist-step__number">03</span>
+              <span className="checklist-step__name">MOMENTUM <span className="checklist-step__subtitle">RSI Filter</span></span>
+              <span className="checklist-step__badge" style={{ color: sc(rsi.signal).color, background: sc(rsi.signal).bg }}>{rsi.signal}</span>
+            </div>
+            <p className="checklist-step__desc">RSI(14) on 5-min candles. &gt;55 → BUY. &lt;45 → SELL. 45–55 → SIDEWAYS (no trade).</p>
+            {rsi.signal === 'INSUFFICIENT_DATA' ? <div className="checklist-step__warning">Need more than 14 candles.</div> : (
+              <div className="checklist-step__metrics">
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">RSI (14)</span><span className="checklist-step__metric-value">{rsi.rsi}</span></div>
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">Zone</span><span className="checklist-step__metric-value">{rsi.rsi > 55 ? '> 55 Strong' : rsi.rsi < 45 ? '< 45 Weak' : '45–55 Neutral'}</span></div>
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">Signal</span><span className="checklist-step__metric-value checklist-step__metric-value--highlight" style={{ color: sc(rsi.signal).color }}>{rsi.signal}</span></div>
+              </div>
+            )}
+          </div>
+
+
+          {/* ── Step 5: LEVELS ── */}
+          <div className="checklist-step checklist-step--active">
+            <div className="checklist-step__header">
+              <span className="checklist-step__number">05</span>
+              <span className="checklist-step__name">LEVELS <span className="checklist-step__subtitle">Entry Location</span></span>
+              <span className="checklist-step__badge" style={{ color: sc(levels.signal).color, background: sc(levels.signal).bg }}>{levels.signal}</span>
+            </div>
+            <p className="checklist-step__desc">Pivot points from prev-day H/L/C. Within 0.3% of support → CE. Within 0.3% of resistance → PE. Break above R1 → BREAKOUT_UP. Break below S1 → BREAKOUT_DOWN.</p>
+            {levels.signal === 'INSUFFICIENT_DATA' ? <div className="checklist-step__warning">Need previous day&apos;s candles to compute pivots.</div> : (
+              <div className="checklist-step__metrics">
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">Pivot</span><span className="checklist-step__metric-value">{levels.pivot?.toLocaleString('en-IN')}</span></div>
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">R1 / R2</span><span className="checklist-step__metric-value">{levels.r1?.toLocaleString('en-IN')} / {levels.r2?.toLocaleString('en-IN')}</span></div>
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">S1 / S2</span><span className="checklist-step__metric-value">{levels.s1?.toLocaleString('en-IN')} / {levels.s2?.toLocaleString('en-IN')}</span></div>
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">Signal</span><span className="checklist-step__metric-value checklist-step__metric-value--highlight" style={{ color: sc(levels.signal).color }}>{levels.signal}</span></div>
+              </div>
+            )}
+          </div>
+
+          {/* ── Step 6: ENTRY CANDLE ── */}
+          <div className="checklist-step checklist-step--active">
+            <div className="checklist-step__header">
+              <span className="checklist-step__number">06</span>
+              <span className="checklist-step__name">ENTRY CANDLE <span className="checklist-step__subtitle">Trigger</span></span>
+              <span className="checklist-step__badge" style={{ color: sc(candle.signal).color, background: sc(candle.signal).bg }}>{candle.signal}</span>
+            </div>
+            <p className="checklist-step__desc">Last completed 5-min candle. Body ratio &gt;0.6 + green → BULLISH_CANDLE. &gt;0.6 + red → BEARISH_CANDLE. &lt;0.6 → WEAK_CANDLE (skip).</p>
+            {candle.signal === 'INSUFFICIENT_DATA' ? <div className="checklist-step__warning">Need at least 2 candles.</div> : (
+              <div className="checklist-step__metrics">
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">Body Ratio</span><span className="checklist-step__metric-value">{candle.bodyRatio}</span></div>
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">Open / Close</span><span className="checklist-step__metric-value">{candle.open?.toLocaleString('en-IN')} / {candle.close?.toLocaleString('en-IN')}</span></div>
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">Direction</span><span className="checklist-step__metric-value">{candle.isBullish === true ? 'Green' : candle.isBullish === false ? 'Red' : '—'}</span></div>
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">Signal</span><span className="checklist-step__metric-value checklist-step__metric-value--highlight" style={{ color: sc(candle.signal).color }}>{candle.signal}</span></div>
+              </div>
+            )}
+          </div>
+
+          {/* ── Step 7: STRIKE SELECTION ── */}
+          <div className="checklist-step checklist-step--active">
+            <div className="checklist-step__header">
+              <span className="checklist-step__number">07</span>
+              <span className="checklist-step__name">STRIKE SELECTION <span className="checklist-step__subtitle">Options Setup</span></span>
+              <span className="checklist-step__badge" style={{ color: sc(strike.signal).color, background: sc(strike.signal).bg }}>{strike.signal}</span>
+            </div>
+            <p className="checklist-step__desc">ITM (conf 60–75%) · ATM (conf ≥75%) · OTM (breakout). Bank Nifty interval: 100 pts.</p>
+            {strike.signal === 'INSUFFICIENT_DATA' ? <div className="checklist-step__warning">No price data for strike calculation.</div> : (
+              <div className="checklist-step__metrics">
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">ATM</span><span className="checklist-step__metric-value">{strike.atm?.toLocaleString('en-IN')}</span></div>
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">Recommended</span><span className="checklist-step__metric-value checklist-step__metric-value--highlight" style={{ color: sc(strike.signal).color }}>{strike.strike?.toLocaleString('en-IN')} ({strike.strikeType})</span></div>
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">Confidence</span><span className="checklist-step__metric-value">{confidence.toFixed(0)}%</span></div>
+                <div className="checklist-step__metric"><span className="checklist-step__metric-label">Option</span><span className="checklist-step__metric-value">{trend.signal === 'BULLISH' ? 'CE' : trend.signal === 'BEARISH' ? 'PE' : '—'}</span></div>
+              </div>
+            )}
+          </div>
+
+          {/* ── Step 8: RISK MANAGEMENT ── */}
+          <div className="checklist-step checklist-step--active">
+            <div className="checklist-step__header">
+              <span className="checklist-step__number">08</span>
+              <span className="checklist-step__name">RISK MANAGEMENT <span className="checklist-step__subtitle">SL & Target</span></span>
+              <span className="checklist-step__badge" style={{ color: sc(risk.signal).color, background: sc(risk.signal).bg }}>{risk.signal}</span>
+            </div>
+            <p className="checklist-step__desc">SL: 10–15% of premium. Target: 20–40% of premium. R:R ≥ 1:2. Max 2–3 trades/day.</p>
+            <div className="checklist-step__metrics">
+              <div className="checklist-step__metric"><span className="checklist-step__metric-label">Stop Loss</span><span className="checklist-step__metric-value">{risk.slPct}% of premium</span></div>
+              <div className="checklist-step__metric"><span className="checklist-step__metric-label">Target</span><span className="checklist-step__metric-value">{risk.tgtPct}% of premium</span></div>
+              <div className="checklist-step__metric"><span className="checklist-step__metric-label">R:R Ratio</span><span className="checklist-step__metric-value" style={{ color: sc(risk.signal).color }}>{risk.riskReward}:1</span></div>
+              <div className="checklist-step__metric"><span className="checklist-step__metric-label">Max Trades</span><span className="checklist-step__metric-value">{risk.maxTrades}/day</span></div>
+            </div>
+          </div>
+
+          {/* ── Step 9: NO TRADE CONDITIONS ── */}
+          <div className="checklist-step checklist-step--active">
+            <div className="checklist-step__header">
+              <span className="checklist-step__number">09</span>
+              <span className="checklist-step__name">NO TRADE CONDITIONS <span className="checklist-step__subtitle">Final Override</span></span>
+              <span className="checklist-step__badge" style={{ color: sc(noTrade.signal).color, background: sc(noTrade.signal).bg }}>{noTrade.signal}</span>
+            </div>
+            <p className="checklist-step__desc">Overrides all other signals. Any triggered condition blocks the trade regardless of other step results.</p>
+            <div className="checklist-step__conditions">
+              {noTrade.conditions.map((cond, i) => (
+                <div key={i} className={'checklist-condition' + (cond.triggered ? ' checklist-condition--triggered' : '')}>
+                  <span className="checklist-condition__icon">{cond.triggered ? '✕' : '✓'}</span>
+                  <span className="checklist-condition__text">{cond.reason}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+        </div>
+
+        <div className="checklist-panel__footer">
+          <div className={'checklist-summary ' + (noTrade.signal === 'GO' ? 'checklist-summary--go' : noTrade.signal === 'NO_TRADE' ? 'checklist-summary--nogo' : 'checklist-summary--waiting')}>
+            <div>
+              <div className="checklist-summary__label">Final Signal</div>
+              {noTrade.signal === 'GO' && strike.signal !== 'INSUFFICIENT_DATA' && (
+                <div className="checklist-summary__sub">
+                  {trend.signal === 'BULLISH' ? 'CE' : trend.signal === 'BEARISH' ? 'PE' : '—'} · Strike {strike.strike?.toLocaleString('en-IN')} ({strike.strikeType}) · SL {risk.slPct}% · TGT {risk.tgtPct}%
+                </div>
+              )}
+            </div>
+            <div className="checklist-summary__value" style={{ color: sc(noTrade.signal).color }}>
+              {noTrade.signal === 'GO' ? 'GO' : noTrade.signal === 'NO_TRADE' ? 'NO TRADE' : 'PENDING'}
+            </div>
+          </div>
+        </div>
+
+      </div>
     </div>
   );
 }

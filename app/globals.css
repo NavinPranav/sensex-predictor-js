@@ -987,6 +987,24 @@
   background: #f8fafc;
 }
 
+.prediction-history-shell__th--select,
+.prediction-history-shell__td--select {
+  width: 38px;
+  min-width: 38px;
+  max-width: 42px;
+  text-align: center;
+  vertical-align: middle;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.prediction-history-shell__th--select input[type='checkbox'],
+.prediction-history-shell__td--select input[type='checkbox'] {
+  cursor: pointer;
+  margin: 0;
+  vertical-align: middle;
+}
+
 .prediction-history-shell__th--sortable {
   padding-top: 8px;
   padding-bottom: 8px;
@@ -2541,4 +2559,329 @@
 .daily-analysis-modal__dismiss-btn:hover {
   background: #2a4f82;
   color: #e8f1fb;
+}
+
+/* ── Pro Trading Checklist ── */
+.checklist-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 0;
+  overflow-y: auto;
+  animation: dashboard-backdrop-fade-in 0.2s ease;
+}
+
+.checklist-panel {
+  position: relative;
+  width: 100%;
+  max-width: 720px;
+  min-height: 100vh;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 40px rgba(15, 23, 42, 0.18);
+}
+
+.checklist-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 24px 24px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  position: sticky;
+  top: 0;
+  background: #fff;
+  z-index: 10;
+}
+
+.checklist-panel__eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #64748b;
+  margin-bottom: 4px;
+}
+
+.checklist-panel__title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0;
+}
+
+.checklist-panel__close {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 1.3rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.checklist-panel__close:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.checklist-progress-bar {
+  height: 4px;
+  background: #e5e7eb;
+  flex-shrink: 0;
+}
+
+.checklist-progress-bar__fill {
+  height: 100%;
+  background: linear-gradient(90deg, #2563eb, #16a34a);
+  border-radius: 0 2px 2px 0;
+  transition: width 0.4s ease;
+}
+
+.checklist-meta {
+  font-size: 12px;
+  color: #94a3b8;
+  margin: 0;
+  padding: 8px 24px;
+  border-bottom: 1px solid #f1f5f9;
+  background: #fafafa;
+}
+
+.checklist-panel__body {
+  flex: 1;
+  padding: 16px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.checklist-panel__footer {
+  padding: 16px 24px;
+  border-top: 1px solid #e5e7eb;
+  background: #fafafa;
+  position: sticky;
+  bottom: 0;
+}
+
+/* Step card */
+.checklist-step {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.checklist-step--active {
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+}
+
+.checklist-step--pending {
+  background: #fafafa;
+  opacity: 0.65;
+}
+
+.checklist-step__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+}
+
+.checklist-step__number {
+  font-size: 11px;
+  font-weight: 800;
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  width: 20px;
+}
+
+.checklist-step__name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1e293b;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.checklist-step__subtitle {
+  font-size: 11px;
+  font-weight: 500;
+  color: #64748b;
+}
+
+.checklist-step__badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 3px 9px;
+  border-radius: 20px;
+}
+
+.checklist-step__badge--pending {
+  background: #f1f5f9;
+  color: #94a3b8;
+}
+
+.checklist-step__desc {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.55;
+  padding: 0 16px 10px;
+}
+
+.checklist-step__warning {
+  font-size: 12px;
+  color: #b45309;
+  background: #fef3c7;
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 0 16px 12px;
+}
+
+.checklist-step__metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+  padding: 0 16px 14px;
+}
+
+.checklist-step__metric {
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.checklist-step__metric-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #94a3b8;
+}
+
+.checklist-step__metric-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1e293b;
+  font-variant-numeric: tabular-nums;
+}
+
+.checklist-step__metric-value--highlight {
+  font-size: 15px;
+}
+
+/* GO/NO-GO summary */
+.checklist-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+}
+
+.checklist-summary--waiting {
+  background: #f8fafc;
+  border-color: #e5e7eb;
+}
+
+.checklist-summary--go {
+  background: #dcfce7;
+  border-color: #86efac;
+}
+
+.checklist-summary--nogo {
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+.checklist-summary__label {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #64748b;
+}
+
+.checklist-summary__value {
+  font-size: 14px;
+  font-weight: 700;
+  color: #475569;
+}
+
+.checklist-summary__sub {
+  font-size: 11px;
+  font-weight: 500;
+  color: #16a34a;
+  margin-top: 3px;
+}
+
+.checklist-step__conditions {
+  padding: 0 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.checklist-condition {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #f0fdf4;
+  font-size: 12px;
+  color: #16a34a;
+  line-height: 1.4;
+}
+
+.checklist-condition--triggered {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.checklist-condition__icon {
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.checklist-condition__text {
+  flex: 1;
+}
+
+@media (max-width: 600px) {
+  .checklist-panel__header {
+    padding: 16px 16px 12px;
+  }
+  .checklist-panel__body {
+    padding: 12px 16px 20px;
+  }
+  .checklist-panel__footer {
+    padding: 12px 16px;
+  }
+  .checklist-meta {
+    padding: 8px 16px;
+  }
 }
