@@ -2781,14 +2781,23 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
     return () => clearInterval(id);
   }, []);
 
-  // Load chart OHLCV
-  useEffect(() => {
+  /** Refresh session OHLCV for chart + Trade Checklist (same cadence as 5m bars). */
+  const refreshChartCandles = useCallback(() => {
     const intervalCode = horizon === '5M' ? '1M' : '5M';
     const periodCode = horizon === '5M' ? '3D' : '5D';
     api.getOhlcv(periodCode, intervalCode)
       .then(rows => setChartCandles(toChartCandles(rows)))
       .catch(() => {});
   }, [horizon]);
+
+  useEffect(() => {
+    refreshChartCandles();
+  }, [refreshChartCandles]);
+
+  useEffect(() => {
+    const id = setInterval(refreshChartCandles, 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [refreshChartCandles]);
 
   // Aggregate live ticks into current candle for chart
   useEffect(() => {
