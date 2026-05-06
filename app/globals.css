@@ -392,6 +392,18 @@
   }
 }
 
+/* Charts dialog: auto height so the line chart does not sit in a full-screen empty shell */
+.prediction-history-dialog.charts-dialog {
+  height: auto;
+  max-height: min(92dvh, 900px);
+}
+
+.charts-dialog__chart-host {
+  width: 100%;
+  min-height: 300px;
+  height: min(48vh, 440px);
+}
+
 /* Nested over prompt history: full prompt preview */
 .prompt-detail-overlay {
   position: fixed;

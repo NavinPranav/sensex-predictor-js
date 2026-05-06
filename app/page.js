@@ -2661,6 +2661,209 @@ function NewsSentimentCard() {
   );
 }
 
+/** Dual line chart: candle closes vs saved prediction reference levels (same price scale). */
+function MarketPredictionLineChart({ candles, predictionPoints }) {
+  const containerRef = useRef(null);
+  const chartRef = useRef(null);
+  const marketSeriesRef = useRef(null);
+  const predSeriesRef = useRef(null);
+  const candlesRef = useRef(candles);
+  const predictionPointsRef = useRef(predictionPoints);
+  candlesRef.current = candles;
+  predictionPointsRef.current = predictionPoints;
+
+  const applySeriesData = useCallback(() => {
+    if (!marketSeriesRef.current || !predSeriesRef.current || !chartRef.current) return;
+    const cArr = Array.isArray(candlesRef.current) ? candlesRef.current : [];
+    const mdata = cArr
+      .map((c) => ({ time: c.time, value: Number(c.close) }))
+      .filter((x) => Number.isFinite(x.time) && Number.isFinite(x.value));
+    marketSeriesRef.current.setData(mdata);
+    const pdata = Array.isArray(predictionPointsRef.current) ? predictionPointsRef.current : [];
+    predSeriesRef.current.setData(pdata);
+    if (mdata.length) chartRef.current.timeScale().fitContent();
+    else if (pdata.length) chartRef.current.timeScale().fitContent();
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let ro;
+    import('lightweight-charts').then(({ createChart, CrosshairMode, LineStyle }) => {
+      if (!containerRef.current || disposed) return;
+      const h = Math.max(280, containerRef.current.clientHeight || 320);
+      const chart = createChart(containerRef.current, {
+        width: containerRef.current.clientWidth,
+        height: h,
+        layout: { background: { type: 'solid', color: '#0f172a' }, textColor: '#94a3b8' },
+        grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
+        crosshair: { mode: CrosshairMode.Normal },
+        rightPriceScale: { borderColor: '#334155' },
+        timeScale: { borderColor: '#334155', timeVisible: true, secondsVisible: false },
+        handleScroll: true,
+        handleScale: true,
+      });
+      const marketLine = chart.addLineSeries({
+        color: '#38bdf8',
+        lineWidth: 2,
+      });
+      const predLine = chart.addLineSeries({
+        color: '#c084fc',
+        lineWidth: 2,
+        lineStyle: LineStyle.Dashed,
+      });
+      chartRef.current = chart;
+      marketSeriesRef.current = marketLine;
+      predSeriesRef.current = predLine;
+      applySeriesData();
+
+      ro = new ResizeObserver(() => {
+        if (!containerRef.current || !chartRef.current) return;
+        chartRef.current.applyOptions({
+          width: containerRef.current.clientWidth,
+          height: Math.max(280, containerRef.current.clientHeight || 320),
+        });
+      });
+      ro.observe(containerRef.current);
+    });
+
+    return () => {
+      disposed = true;
+      ro?.disconnect();
+      chartRef.current?.remove();
+      chartRef.current = null;
+      marketSeriesRef.current = null;
+      predSeriesRef.current = null;
+    };
+  }, [applySeriesData]);
+
+  useEffect(() => {
+    applySeriesData();
+  }, [candles, predictionPoints, applySeriesData]);
+
+  return <div ref={containerRef} className="charts-dialog__chart-host" />;
+}
+
+function ChartsDialog({ open, onClose, horizon, chartCandles, prediction }) {
+  const [predPoints, setPredPoints] = useState([]);
+  const [loadErr, setLoadErr] = useState(null);
+  const [loadingPred, setLoadingPred] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setPredPoints([]);
+      setLoadErr(null);
+      return;
+    }
+    setLoadingPred(true);
+    setLoadErr(null);
+    api
+      .getHistory(0, 500, 'mine', { horizons: [horizon], sortTime: 'asc' })
+      .then((res) => {
+        const rows = res?.predictions ?? [];
+        const byTime = new Map();
+        for (const p of rows) {
+          if (!p.predictionTimestamp) continue;
+          const ts = Math.floor(new Date(p.predictionTimestamp).getTime() / 1000);
+          if (!ts) continue;
+          const v = Number(p.currentSensex ?? p.entryPrice);
+          if (!Number.isFinite(v) || v <= 0) continue;
+          byTime.set(ts, v);
+        }
+        let pts = [...byTime.entries()]
+          .map(([time, value]) => ({ time, value }))
+          .sort((a, b) => a.time - b.time);
+        const curMs = Number(prediction?.predictionTimestampMs || 0);
+        const curVal = Number(prediction?.currentSensex ?? prediction?.entryPrice ?? NaN);
+        if (curMs > 0 && Number.isFinite(curVal) && curVal > 0) {
+          const t = Math.floor(curMs / 1000);
+          const idx = pts.findIndex((o) => o.time === t);
+          if (idx >= 0) pts[idx] = { time: t, value: curVal };
+          else pts.push({ time: t, value: curVal });
+          pts.sort((a, b) => a.time - b.time);
+        }
+        setPredPoints(pts);
+      })
+      .catch(() => {
+        setLoadErr('Could not load saved predictions.');
+        setPredPoints([]);
+      })
+      .finally(() => setLoadingPred(false));
+  }, [open, horizon, prediction?.predictionTimestampMs, prediction?.currentSensex, prediction?.entryPrice]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  const hasCandles = Array.isArray(chartCandles) && chartCandles.length > 0;
+  const showChart = hasCandles || predPoints.length > 0;
+  const showLoadingOverlay = loadingPred && !showChart;
+
+  return (
+    <div className="prediction-history-overlay" onClick={onClose} role="presentation">
+      <div
+        className="prediction-history-dialog charts-dialog"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="charts-dialog-title"
+      >
+        <header className="prediction-history-shell__header prediction-history-shell__header--centered">
+          <h2 id="charts-dialog-title" className="prediction-history-shell__title prediction-history-shell__title--center">
+            Charts
+          </h2>
+          <button
+            type="button"
+            className="prediction-history-shell__close prediction-history-shell__close--floating"
+            onClick={onClose}
+            aria-label="Close charts"
+          >
+            ×
+          </button>
+        </header>
+        <p style={{ fontSize: 13, color: '#64748b', margin: '0 16px 12px', lineHeight: 1.5 }}>
+          <strong>{horizon}</strong> · Cyan: Bank Nifty <strong>close</strong> (loaded candles). Purple (dashed): each saved signal&apos;s{' '}
+          <strong>reference level</strong> (index / entry at prediction time). One price scale.
+        </p>
+        {loadErr ? <p style={{ color: '#dc2626', padding: '0 16px 8px', fontSize: 13 }}>{loadErr}</p> : null}
+        {showLoadingOverlay ? (
+          <div className="prediction-history-shell__center-msg">Loading chart data…</div>
+        ) : !showChart ? (
+          <div className="prediction-history-shell__empty" style={{ margin: '0 16px 24px' }}>
+            No candle data and no saved predictions for this horizon yet. Change horizon on the dashboard or wait for data.
+          </div>
+        ) : (
+          <div style={{ padding: '0 12px 20px' }}>
+            <div style={{ display: 'flex', gap: 18, fontSize: 12, color: '#475569', marginBottom: 10, flexWrap: 'wrap' }}>
+              <span>
+                <span style={{ color: '#38bdf8', fontWeight: 700 }} aria-hidden>● </span>
+                Market close
+              </span>
+              <span>
+                <span style={{ color: '#c084fc', fontWeight: 700 }} aria-hidden>● </span>
+                Prediction level
+              </span>
+              {loadingPred ? <span style={{ color: '#94a3b8' }}>Updating predictions…</span> : null}
+            </div>
+            <MarketPredictionLineChart candles={chartCandles} predictionPoints={predPoints} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AdminPromptSection({ embedded }) {
   const [promptText, setPromptText] = useState(DEFAULT_PROMPT_HINT);
   const [label, setLabel] = useState('');
@@ -3224,6 +3427,7 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
   const [userMgmtOpen, setUserMgmtOpen] = useState(false);
   const [aiPromptOpen, setAiPromptOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [chartsOpen, setChartsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [checklistOpen, setChecklistOpen] = useState(false);
   const [activeInstrumentId, setActiveInstrumentId] = useState('BANKNIFTY');
@@ -3535,6 +3739,24 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
               <li className="dashboard-sidebar-nav__item">
                 <button
                   type="button"
+                  className={'dashboard-sidebar-nav__link' + (chartsOpen ? ' dashboard-sidebar-nav__link--active' : '')}
+                  onClick={() => {
+                    setChartsOpen(true);
+                    setSidebarOpen(false);
+                  }}
+                  aria-haspopup="dialog"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="M3 3v18h18" />
+                    <path d="M7 16l4-4 4 4 6-7" />
+                  </svg>
+                  Charts
+                </button>
+              </li>
+
+              <li className="dashboard-sidebar-nav__item">
+                <button
+                  type="button"
                   className={'dashboard-sidebar-nav__link' + (checklistOpen ? ' dashboard-sidebar-nav__link--active' : '')}
                   onClick={() => { setChecklistOpen(true); setSidebarOpen(false); }}
                   aria-haspopup="dialog"
@@ -3735,6 +3957,13 @@ function Dashboard({ user, accessToken, onLogout, onUserUpdate }) {
       </div>
 
       <PredictionHistoryDialog open={historyOpen} onClose={() => setHistoryOpen(false)} isAdmin={user?.role === 'ADMIN'} />
+      <ChartsDialog
+        open={chartsOpen}
+        onClose={() => setChartsOpen(false)}
+        horizon={horizon}
+        chartCandles={chartCandles}
+        prediction={prediction}
+      />
       <DailyAnalysisPopup data={dailyAnalysisPopup} onDismiss={dismissDailyAnalysis} />
 
       {settingsOpen ? (
