@@ -254,6 +254,28 @@ const api = {
     }
     return res.json();
   },
+  async getAiParameters() {
+    const res = await fetch(`${API}/api/admin/ai-parameters`, {
+      headers: { Authorization: 'Bearer ' + this.token },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to load AI parameters');
+    }
+    return res.json();
+  },
+  async setAiParameter(key, enabled) {
+    const res = await fetch(`${API}/api/admin/ai-parameters/${encodeURIComponent(key)}`, {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer ' + this.token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Failed to update parameter "${key}"`);
+    }
+    return res.json();
+  },
   async getMyRiskSettings() {
     const res = await fetch(`${API}/api/me/risk-settings`, {
       headers: { Authorization: 'Bearer ' + this.token },
@@ -3358,6 +3380,174 @@ function RiskLimitsSettingsForm({ hideHeading = false }) {
   );
 }
 
+// ── Admin: AI Parameters (Phase 4.4) ──
+// Lists every input the prediction service feeds to Gemini. Required parameters
+// (raw OHLCV, indicators, current price, multi-timeframe trend context, target
+// horizon) render with a locked toggle and a "Required" badge so the operator
+// can never accidentally remove a guardrail input. Optional parameters
+// (VIX, checklist, news, prev-day levels, S/R levels) are toggleable; flipping
+// one writes through to ai_parameter_settings and the backend pushes the new
+// map to the ML service via PUT /admin/parameters.
+function AdminParametersSection({ embedded }) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [pendingKey, setPendingKey] = useState(null);
+  const [status, setStatus] = useState(null);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    api.getAiParameters()
+      .then((d) => setItems(Array.isArray(d?.parameters) ? d.parameters : []))
+      .catch((e) => setStatus({ type: 'err', msg: e.message || 'Failed to load parameters' }))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function toggle(p) {
+    if (p.required) return;
+    const next = !p.enabled;
+    setPendingKey(p.key);
+    setStatus(null);
+    setItems((prev) => prev.map((it) => (it.key === p.key ? { ...it, enabled: next } : it)));
+    try {
+      const saved = await api.setAiParameter(p.key, next);
+      setItems((prev) => prev.map((it) => (it.key === p.key ? { ...it, ...saved } : it)));
+      setStatus({ type: 'ok', msg: `${p.displayName} ${next ? 'enabled' : 'disabled'}.` });
+    } catch (e) {
+      setItems((prev) => prev.map((it) => (it.key === p.key ? { ...it, enabled: !next } : it)));
+      setStatus({ type: 'err', msg: e.message || 'Failed to update parameter' });
+    } finally {
+      setPendingKey(null);
+    }
+  }
+
+  const required = items.filter((p) => p.required);
+  const optional = items.filter((p) => !p.required);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      <div>
+        <h3 style={{ margin: 0, fontSize: 16 }}>AI input parameters</h3>
+        <p style={{ margin: '4px 0 0', fontSize: 12, color: '#64748b' }}>
+          Choose which inputs are sent to the model on every prediction. Required inputs are
+          locked — the model and the post-AI guardrails depend on them. Optional inputs can be
+          turned off if you want to A/B test the model without that signal.
+        </p>
+      </div>
+
+      {status && (
+        <div style={{
+          padding: '8px 12px',
+          borderRadius: 6,
+          fontSize: 13,
+          background: status.type === 'ok' ? '#ecfdf5' : '#fef2f2',
+          color: status.type === 'ok' ? '#065f46' : '#991b1b',
+          border: `1px solid ${status.type === 'ok' ? '#a7f3d0' : '#fecaca'}`,
+        }}>{status.msg}</div>
+      )}
+
+      {loading ? (
+        <div style={{ fontSize: 13, color: '#64748b' }}>Loading…</div>
+      ) : (
+        <>
+          <ParameterGroup title="Required (always on)" items={required} pendingKey={pendingKey} onToggle={toggle} />
+          <ParameterGroup title="Optional" items={optional} pendingKey={pendingKey} onToggle={toggle} />
+        </>
+      )}
+    </div>
+  );
+}
+
+function ParameterGroup({ title, items, pendingKey, onToggle }) {
+  if (!items?.length) return null;
+  return (
+    <div>
+      <div style={{ fontSize: 12, fontWeight: 600, color: '#475569', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>
+        {title}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {items.map((p) => (
+          <ParameterRow key={p.key} p={p} pending={pendingKey === p.key} onToggle={onToggle} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ParameterRow({ p, pending, onToggle }) {
+  const disabled = p.required || pending;
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'flex-start',
+      justifyContent: 'space-between',
+      gap: 12,
+      padding: '12px 14px',
+      border: '1px solid #e2e8f0',
+      borderRadius: 8,
+      background: p.required ? '#f8fafc' : '#fff',
+    }}>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>{p.displayName}</div>
+          {p.required && (
+            <span style={{
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: 0.5,
+              padding: '2px 6px',
+              borderRadius: 4,
+              background: '#dbeafe',
+              color: '#1e3a8a',
+              textTransform: 'uppercase',
+            }}>Required</span>
+          )}
+          <span style={{ fontSize: 10, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', color: '#94a3b8' }}>
+            {p.key}
+          </span>
+        </div>
+        {p.description && (
+          <div style={{ fontSize: 12, color: '#64748b', marginTop: 4, lineHeight: 1.45 }}>{p.description}</div>
+        )}
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={p.enabled}
+        aria-label={`Toggle ${p.displayName}`}
+        disabled={disabled}
+        onClick={() => onToggle(p)}
+        style={{
+          flexShrink: 0,
+          width: 42,
+          height: 24,
+          borderRadius: 999,
+          border: 'none',
+          padding: 0,
+          position: 'relative',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          background: p.enabled ? '#22c55e' : '#cbd5e1',
+          opacity: disabled ? (p.required ? 0.7 : 0.5) : 1,
+          transition: 'background 0.15s, opacity 0.15s',
+        }}
+      >
+        <span style={{
+          position: 'absolute',
+          top: 3,
+          left: p.enabled ? 21 : 3,
+          width: 18,
+          height: 18,
+          borderRadius: '50%',
+          background: '#fff',
+          boxShadow: '0 1px 3px rgba(15, 23, 42, 0.2)',
+          transition: 'left 0.15s',
+        }} />
+      </button>
+    </div>
+  );
+}
+
 // ── AI Management Modal ──
 function AiManagementModal({ onClose }) {
   const [activeTab, setActiveTab] = useState('prompt');
@@ -3382,7 +3572,12 @@ function AiManagementModal({ onClose }) {
         <h2 id="ai-mgmt-dialog-title" style={{ marginBottom: 16 }}>AI management</h2>
 
         <div style={{ display: 'flex', gap: 6, marginBottom: 20, borderBottom: '1px solid #e2e8f0', paddingBottom: 12, flexWrap: 'wrap' }}>
-          {[{ key: 'prompt', label: 'Prompt' }, { key: 'adjustments', label: 'Adjustments' }, { key: 'model', label: 'AI Model' }].map(({ key, label }) => (
+          {[
+            { key: 'prompt', label: 'Prompt' },
+            { key: 'parameters', label: 'Parameters' },
+            { key: 'adjustments', label: 'Adjustments' },
+            { key: 'model', label: 'AI Model' },
+          ].map(({ key, label }) => (
             <button
               key={key}
               type="button"
@@ -3404,7 +3599,15 @@ function AiManagementModal({ onClose }) {
           ))}
         </div>
 
-        {activeTab === 'prompt' ? <AdminPromptSection embedded /> : activeTab === 'adjustments' ? <AdminAdjustmentsSection embedded /> : <AdminAiModelSection />}
+        {activeTab === 'prompt' ? (
+          <AdminPromptSection embedded />
+        ) : activeTab === 'parameters' ? (
+          <AdminParametersSection embedded />
+        ) : activeTab === 'adjustments' ? (
+          <AdminAdjustmentsSection embedded />
+        ) : (
+          <AdminAiModelSection />
+        )}
       </div>
     </div>
   );
