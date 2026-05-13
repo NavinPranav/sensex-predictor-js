@@ -169,6 +169,19 @@ const api = {
     }
     return res.json();
   },
+  async deletePredictions(predictionIds) {
+    const res = await fetch(`${API}/api/predictions`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer ' + this.token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ predictionIds }),
+    });
+    if (res.status === 401 || res.status === 403) throw new Error('SESSION_EXPIRED');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Delete failed');
+    }
+    return res.json();
+  },
   async getDailyAnalysis() {
     const res = await fetch(`${API}/api/predictions/daily-analysis/latest`, {
       headers: { Authorization: 'Bearer ' + this.token },
@@ -1214,6 +1227,10 @@ function PredictionHistoryDialog({ open, onClose, isAdmin }) {
   const [analysing, setAnalysing] = useState(false);
   const [analysis, setAnalysis] = useState(null);
   const [analysisError, setAnalysisError] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
   /** Prediction row ids the user chose for AI analysis (can span multiple pages). */
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const selectAllPageRef = useRef(null);
@@ -1259,7 +1276,7 @@ function PredictionHistoryDialog({ open, onClose, isAdmin }) {
       .then(setData)
       .catch(() => setData(null))
       .finally(() => setLoading(false));
-  }, [open, appliedHorizons, appliedSignals, page, effectiveScope, timeSort]);
+  }, [open, appliedHorizons, appliedSignals, page, effectiveScope, timeSort, refreshKey]);
 
   useEffect(() => {
     if (!open || !openPanel) return;
@@ -1383,6 +1400,23 @@ function PredictionHistoryDialog({ open, onClose, isAdmin }) {
       setAnalysisError(e.message || 'Analysis failed');
     } finally {
       setAnalysing(false);
+    }
+  }, [selectedIds]);
+
+  const handleDelete = useCallback(async () => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    setDeleting(true);
+    setDeleteError(null);
+    setDeleteConfirm(false);
+    try {
+      await api.deletePredictions(ids);
+      setSelectedIds(new Set());
+      setRefreshKey((k) => k + 1);
+    } catch (e) {
+      setDeleteError(e.message || 'Delete failed');
+    } finally {
+      setDeleting(false);
     }
   }, [selectedIds]);
 
@@ -1708,20 +1742,79 @@ function PredictionHistoryDialog({ open, onClose, isAdmin }) {
 
       {!loading && predictions.length > 0 ? (
         <footer className="prediction-history-shell__footer prediction-history-shell__footer--split">
-          <button
-            type="button"
-            className="prediction-history-analyse-btn"
-            onClick={handleAnalyse}
-            disabled={analysing || selectedIds.size === 0}
-            aria-label="Analyse selected predictions with AI"
-          >
-            {analysing ? (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="prediction-history-analyse-btn"
+              onClick={handleAnalyse}
+              disabled={analysing || deleting || selectedIds.size === 0}
+              aria-label="Analyse selected predictions with AI"
+            >
+              {analysing ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <span className="analyse-spinner" aria-hidden="true" />
+                  Analysing…
+                </span>
+              ) : 'Analyse'}
+            </button>
+
+            {deleting ? (
+              <button type="button" disabled style={{
+                padding: '6px 14px', borderRadius: 6, border: '1px solid #fecaca',
+                background: '#fef2f2', color: '#dc2626', fontSize: 13, fontWeight: 600,
+                cursor: 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 6,
+              }}>
                 <span className="analyse-spinner" aria-hidden="true" />
-                Analysing…
+                Deleting…
+              </button>
+            ) : deleteConfirm ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <button
+                  type="button"
+                  onClick={handleDelete}
+                  style={{
+                    padding: '6px 14px', borderRadius: 6, border: 'none',
+                    background: '#dc2626', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                  }}
+                >
+                  Confirm Delete
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirm(false)}
+                  style={{
+                    padding: '6px 10px', borderRadius: 6, border: '1px solid #e2e8f0',
+                    background: '#fff', color: '#64748b', fontSize: 13, cursor: 'pointer',
+                  }}
+                >
+                  Cancel
+                </button>
               </span>
-            ) : 'Analyse'}
-          </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setDeleteConfirm(true)}
+                disabled={analysing || deleting || selectedIds.size === 0}
+                style={{
+                  padding: '6px 14px', borderRadius: 6,
+                  border: '1px solid ' + (selectedIds.size === 0 ? '#e2e8f0' : '#fca5a5'),
+                  background: selectedIds.size === 0 ? '#f8fafc' : '#fef2f2',
+                  color: selectedIds.size === 0 ? '#94a3b8' : '#dc2626',
+                  fontSize: 13, fontWeight: 600,
+                  cursor: selectedIds.size === 0 ? 'not-allowed' : 'pointer',
+                }}
+                aria-label="Delete selected predictions"
+              >
+                Delete
+              </button>
+            )}
+
+            {deleteError && (
+              <span style={{ fontSize: 12, color: '#dc2626', fontWeight: 500 }}>
+                ✗ {deleteError}
+              </span>
+            )}
+          </div>
 
           {showPager ? (
             <nav className="prediction-history-shell__pager-stack" aria-label="Table pagination">
