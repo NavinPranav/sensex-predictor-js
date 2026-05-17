@@ -3181,12 +3181,14 @@ function AdminPromptSection({ embedded }) {
 /** Live-tunable prediction thresholds (ML service). Labels avoid vendor-specific naming. */
 function AdminAdjustmentsSection({ embedded }) {
   const emptyPolicy = () => ({
-    minConfidence: 65,
-    minRiskReward: 1.5,
+    minConfidence: 0,
+    minRiskReward: 0,
     strongTrendMinEmaGapPct: 0.1,
-    relaxedConfidenceFloorStrongTrend: 58,
-    sellNearSupportMinConfidence: 72,
+    relaxedConfidenceFloorStrongTrend: 0,
+    sellNearSupportMinConfidence: 0,
     minAtrPctOfPrice: 0,
+    trendGuardrailEnabled: false,
+    reversalConfirmationMinSignals: 3,
     rateLimitMaxRetries: 4,
     rateLimitRetryBaseDelaySec: 8,
   });
@@ -3210,6 +3212,8 @@ function AdminAdjustmentsSection({ embedded }) {
           relaxedConfidenceFloorStrongTrend: Number(d.relaxedConfidenceFloorStrongTrend),
           sellNearSupportMinConfidence: Number(d.sellNearSupportMinConfidence),
           minAtrPctOfPrice: Number(d.minAtrPctOfPrice),
+          trendGuardrailEnabled: Boolean(d.trendGuardrailEnabled),
+          reversalConfirmationMinSignals: Number(d.reversalConfirmationMinSignals),
           rateLimitMaxRetries: Number(d.rateLimitMaxRetries),
           rateLimitRetryBaseDelaySec: Number(d.rateLimitRetryBaseDelaySec),
         });
@@ -3292,11 +3296,34 @@ function AdminAdjustmentsSection({ embedded }) {
       ) : (
         <>
           {row('Minimum confidence (%)', 'BUY/SELL below this becomes HOLD unless strong-trend relaxation applies.', 'minConfidence', { min: 0, max: 100, step: 1 })}
-          {row('Minimum risk : reward', 'Below this ratio, directional signals are downgraded to HOLD.', 'minRiskReward', { min: 0.5, max: 20, step: 0.1 })}
+          {row('Minimum risk : reward', 'Below this ratio, directional signals are downgraded to HOLD. Set to 0 to disable.', 'minRiskReward', { min: 0, max: 20, step: 0.1 })}
           {row('Strong trend — EMA gap (%)', 'If EMA9 vs EMA21 separation vs price is at least this, a lower confidence floor may apply.', 'strongTrendMinEmaGapPct', { min: 0, max: 5, step: 0.01 })}
           {row('Strong trend — relaxed confidence floor (%)', 'Minimum confidence allowed when the strong-trend rule fires (reduces excess HOLD in trends).', 'relaxedConfidenceFloorStrongTrend', { min: 0, max: 100, step: 1 })}
           {row('SELL near support — min confidence (%)', 'Stricter floor when the checklist marks price near support and the model says SELL.', 'sellNearSupportMinConfidence', { min: 0, max: 100, step: 1 })}
           {row('Low volatility gate — min ATR %% of price', 'Set to 0 to disable. If ATR(14)/price × 100 is below this, force HOLD (dead tape).', 'minAtrPctOfPrice', { min: 0, max: 10, step: 0.01 })}
+          <div key="trendGuardrailEnabled" style={{ marginBottom: 14 }}>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
+              Trend guardrail
+              {envDefaults && envDefaults.trendGuardrailEnabled != null && (
+                <span style={{ fontWeight: 400, color: '#94a3b8', marginLeft: 6 }}>
+                  (env default: {envDefaults.trendGuardrailEnabled ? 'on' : 'off'})
+                </span>
+              )}
+            </label>
+            <p style={{ margin: '0 0 6px', fontSize: 11, color: '#64748b', lineHeight: 1.45 }}>
+              When on, BUY in a downtrend and SELL in an uptrend are vetoed to HOLD. Turn off to see the model&apos;s raw directional call regardless of trend.
+            </p>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={policy.trendGuardrailEnabled}
+                onChange={(e) => setPolicy((p) => ({ ...p, trendGuardrailEnabled: e.target.checked }))}
+                style={{ width: 16, height: 16, cursor: 'pointer' }}
+              />
+              <span style={{ fontSize: 13, color: '#374151' }}>{policy.trendGuardrailEnabled ? 'Enabled' : 'Disabled'}</span>
+            </label>
+          </div>
+          {row('Reversal confirmation signals', 'Only active when trend guardrail is on. Counter-trend BUY/SELL is allowed when this many reversal signals fire (engulfing, volume spike, RSI turn, VWAP reclaim). Range 1–99.', 'reversalConfirmationMinSignals', { min: 1, max: 99, step: 1, int: true })}
           {row('Rate-limit retries', 'HTTP 429: attempts before returning a placeholder HOLD.', 'rateLimitMaxRetries', { min: 1, max: 20, step: 1, int: true })}
           {row('Rate-limit retry base delay (sec)', 'First backoff delay; doubles each attempt (capped).', 'rateLimitRetryBaseDelaySec', { min: 1, max: 120, step: 1 })}
         </>
