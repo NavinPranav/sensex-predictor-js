@@ -3191,6 +3191,11 @@ function AdminAdjustmentsSection({ embedded }) {
     reversalConfirmationMinSignals: 3,
     rateLimitMaxRetries: 4,
     rateLimitRetryBaseDelaySec: 8,
+    candlestickPatternsEnabled: true,
+    fibonacciEnabled: true,
+    orbEnabled: true,
+    higherTfIndicatorsEnabled: true,
+    consensusEnabled: false,
   });
 
   const [policy, setPolicy] = useState(emptyPolicy);
@@ -3216,6 +3221,11 @@ function AdminAdjustmentsSection({ embedded }) {
           reversalConfirmationMinSignals: Number(d.reversalConfirmationMinSignals),
           rateLimitMaxRetries: Number(d.rateLimitMaxRetries),
           rateLimitRetryBaseDelaySec: Number(d.rateLimitRetryBaseDelaySec),
+          candlestickPatternsEnabled: d.candlestickPatternsEnabled != null ? Boolean(d.candlestickPatternsEnabled) : true,
+          fibonacciEnabled: d.fibonacciEnabled != null ? Boolean(d.fibonacciEnabled) : true,
+          orbEnabled: d.orbEnabled != null ? Boolean(d.orbEnabled) : true,
+          higherTfIndicatorsEnabled: d.higherTfIndicatorsEnabled != null ? Boolean(d.higherTfIndicatorsEnabled) : true,
+          consensusEnabled: d.consensusEnabled != null ? Boolean(d.consensusEnabled) : false,
         });
         setHasOverrides(Boolean(d.hasActiveOverrides));
         if (d.envDefaults) setEnvDefaults(d.envDefaults);
@@ -3295,6 +3305,33 @@ function AdminAdjustmentsSection({ embedded }) {
         <p style={{ fontSize: 13, color: '#64748b' }}>Loading…</p>
       ) : (
         <>
+          <div key="consensusEnabled" style={{ marginBottom: 18, padding: '12px 14px', borderRadius: 8, background: '#f0f9ff', border: '1px solid #bae6fd' }}>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#0369a1', marginBottom: 4 }}>
+              Dual-model consensus
+              {envDefaults && envDefaults.consensusEnabled != null && (
+                <span style={{ fontWeight: 400, color: '#94a3b8', marginLeft: 6 }}>
+                  (env default: {envDefaults.consensusEnabled ? 'on' : 'off'})
+                </span>
+              )}
+            </label>
+            <p style={{ margin: '0 0 8px', fontSize: 11, color: '#0c4a6e', lineHeight: 1.55 }}>
+              When on, every prediction runs both Gemini and OpenAI in parallel.
+              If both agree on direction → trade signal with the lower confidence.
+              If they disagree → HOLD. Requires <code>openai_api_key</code> to be configured.
+              Adds ~5–10 s latency (parallel calls). Expected accuracy gain: +10–15%.
+            </p>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={policy.consensusEnabled}
+                onChange={(e) => setPolicy((p) => ({ ...p, consensusEnabled: e.target.checked }))}
+                style={{ width: 16, height: 16, cursor: 'pointer' }}
+              />
+              <span style={{ fontSize: 13, fontWeight: 600, color: policy.consensusEnabled ? '#0369a1' : '#374151' }}>
+                {policy.consensusEnabled ? 'Enabled — both models must agree' : 'Disabled — single model (Gemini)'}
+              </span>
+            </label>
+          </div>
           {row('Minimum confidence (%)', 'BUY/SELL below this becomes HOLD unless strong-trend relaxation applies.', 'minConfidence', { min: 0, max: 100, step: 1 })}
           {row('Minimum risk : reward', 'Below this ratio, directional signals are downgraded to HOLD. Set to 0 to disable.', 'minRiskReward', { min: 0, max: 20, step: 0.1 })}
           {row('Strong trend — EMA gap (%)', 'If EMA9 vs EMA21 separation vs price is at least this, a lower confidence floor may apply.', 'strongTrendMinEmaGapPct', { min: 0, max: 5, step: 0.01 })}
@@ -3326,6 +3363,34 @@ function AdminAdjustmentsSection({ embedded }) {
           {row('Reversal confirmation signals', 'Only active when trend guardrail is on. Counter-trend BUY/SELL is allowed when this many reversal signals fire (engulfing, volume spike, RSI turn, VWAP reclaim). Range 1–99.', 'reversalConfirmationMinSignals', { min: 1, max: 99, step: 1, int: true })}
           {row('Rate-limit retries', 'HTTP 429: attempts before returning a placeholder HOLD.', 'rateLimitMaxRetries', { min: 1, max: 20, step: 1, int: true })}
           {row('Rate-limit retry base delay (sec)', 'First backoff delay; doubles each attempt (capped).', 'rateLimitRetryBaseDelaySec', { min: 1, max: 120, step: 1 })}
+          <p style={{ margin: '18px 0 10px', fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Technical Analysis Features</p>
+          {[
+            { key: 'candlestickPatternsEnabled', label: 'Candlestick patterns', help: 'Detect doji, hammer, engulfing, marubozu on the last completed bar and pass to the AI as a named signal.' },
+            { key: 'fibonacciEnabled', label: 'Fibonacci retracements', help: 'Compute 23.6% – 78.6% levels from the 50-bar swing high/low and include nearest level in the AI context.' },
+            { key: 'orbEnabled', label: 'Opening Range Breakout (ORB)', help: 'Derive the 9:15–9:30 opening range and classify the current price as ORB_ABOVE, ORB_BELOW, or ORB_INSIDE for the AI.' },
+            { key: 'higherTfIndicatorsEnabled', label: '15-min resampled indicators', help: 'Resample 5-min OHLCV to 15-min bars and compute RSI(14), EMA(9), EMA(20) for higher-timeframe context in the AI prompt.' },
+          ].map(({ key, label, help }) => (
+            <div key={key} style={{ marginBottom: 14 }}>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
+                {label}
+                {envDefaults && envDefaults[key] != null && (
+                  <span style={{ fontWeight: 400, color: '#94a3b8', marginLeft: 6 }}>
+                    (env default: {envDefaults[key] ? 'on' : 'off'})
+                  </span>
+                )}
+              </label>
+              <p style={{ margin: '0 0 6px', fontSize: 11, color: '#64748b', lineHeight: 1.45 }}>{help}</p>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={policy[key]}
+                  onChange={(e) => setPolicy((p) => ({ ...p, [key]: e.target.checked }))}
+                  style={{ width: 16, height: 16, cursor: 'pointer' }}
+                />
+                <span style={{ fontSize: 13, color: '#374151' }}>{policy[key] ? 'Enabled' : 'Disabled'}</span>
+              </label>
+            </div>
+          ))}
         </>
       )}
       {status && (
